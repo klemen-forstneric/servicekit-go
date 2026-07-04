@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/klemen-forstneric/ember v0.0.0-20260701102203-2bf19e9ea82b
+	github.com/klemen-forstneric/ember v0.0.0-20260701100950-41663809b195
 	github.com/stretchr/testify v1.11.1
 )
 
