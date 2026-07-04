@@ -10,6 +10,8 @@ github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zt
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/klemen-forstneric/ember v0.0.0-20260701100950-41663809b195 h1:zreVM7zoEIMishA0ebeXvoSFpVZquAQDUutl0eTihUA=
 github.com/klemen-forstneric/ember v0.0.0-20260701100950-41663809b195/go.mod h1:LeVwlAM+i8VCTJrzK3609jMOq55DLzeAulBkVHH+qWY=
+github.com/klemen-forstneric/spark v0.0.0-20260630085424-86926dcde608 h1:0w0Jc9LusB6OVWHvW3OAj4oqEtWPF1lJzpA46KR/rm4=
+github.com/klemen-forstneric/spark v0.0.0-20260630085424-86926dcde608/go.mod h1:myRagPOpMrFPmpaX5t7rJF1epeZ/tuwV0LCFsSgJkVA=
 github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
 github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
 github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
