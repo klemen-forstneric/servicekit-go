@@ -5,15 +5,11 @@ go 1.26.3
 require (
 	github.com/gofiber/fiber/v2 v2.52.13
 	github.com/google/uuid v1.6.0
-	github.com/klemen-forstneric/ember v0.0.0-20260701100950-41663809b195
-	github.com/klemen-forstneric/spark v0.0.0-20260630085424-86926dcde608
+	github.com/klemen-forstneric/ember v0.0.0-20260723070356-578393179ea2
+	github.com/klemen-forstneric/spark v0.0.0-20260723070954-b48b955fccf4
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 )
-
-replace github.com/klemen-forstneric/ember => ../ember
-
-replace github.com/klemen-forstneric/spark => ../spark
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
