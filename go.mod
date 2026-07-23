@@ -6,7 +6,7 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.13
 	github.com/google/uuid v1.6.0
 	github.com/klemen-forstneric/ember v0.0.0-20260723070356-578393179ea2
-	github.com/klemen-forstneric/spark v0.0.0-20260723070954-b48b955fccf4
+	github.com/klemen-forstneric/spark v0.0.0-20260723084931-190aef19c5ba
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 )
