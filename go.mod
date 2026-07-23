@@ -11,6 +11,10 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
+replace github.com/klemen-forstneric/ember => ../ember
+
+replace github.com/klemen-forstneric/spark => ../spark
+
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
