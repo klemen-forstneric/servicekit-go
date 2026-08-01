@@ -54,6 +54,13 @@ func (m Money) Add(other Money) Money {
 	return Money{Amount: m.Amount.Add(other.Amount), Currency: m.Currency}
 }
 
+// Zero returns a zero amount in the receiver's currency. It cannot fail: the
+// currency is carried over as-is rather than re-parsed, so unlike New this adds
+// no validation — the receiver is assumed already valid.
+func (m Money) Zero() Money {
+	return Money{Amount: decimal.Zero, Currency: m.Currency}
+}
+
 func (m Money) String() string {
 	return fmt.Sprintf("%s %s", m.Amount.String(), m.Currency)
 }

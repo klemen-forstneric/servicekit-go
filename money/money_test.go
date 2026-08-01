@@ -47,3 +47,15 @@ func TestSameCurrency(t *testing.T) {
 	assert.False(t, a.SameCurrency(b))
 	assert.True(t, a.SameCurrency(a))
 }
+
+func TestZero_KeepsCurrencyAndClearsAmount(t *testing.T) {
+	m, err := money.New(decimal.NewFromInt(10), "USD")
+	require.NoError(t, err)
+
+	z := m.Zero()
+
+	assert.True(t, z.IsZero())
+	assert.Equal(t, "USD", z.Currency)
+	// Decimal holds a pointer, so confirm the receiver is untouched.
+	assert.True(t, m.Amount.Equal(decimal.NewFromInt(10)))
+}
