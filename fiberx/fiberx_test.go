@@ -93,3 +93,54 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, cap.infos)
 }
+
+// ipApp echoes c.IP() so the trusted-proxy behaviour is observable. app.Test
+// dials with peer 0.0.0.0, so that is the address to trust or withhold trust
+// from.
+func ipApp(trusted []string) *fiber.App {
+	app := fiber.New(fiberx.TrustedProxyConfig(trusted))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendString(c.IP()) })
+	return app
+}
+
+func ipOf(t *testing.T, app *fiber.App, forwardedFor string) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/", nil)
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	body := make([]byte, resp.ContentLength)
+	_, _ = resp.Body.Read(body)
+	return string(body)
+}
+
+func TestTrustedProxyConfig_ReportsForwardedClient(t *testing.T) {
+	got := ipOf(t, ipApp([]string{"0.0.0.0"}), "203.0.113.7")
+	assert.Equal(t, "203.0.113.7", got)
+}
+
+// The client is the first hop; the rest of the chain is proxies. Reporting the
+// whole header verbatim would send "client, proxy" downstream as the IP.
+func TestTrustedProxyConfig_TakesTheClientFromAChain(t *testing.T) {
+	got := ipOf(t, ipApp([]string{"0.0.0.0"}), "203.0.113.7, 10.0.0.1, 10.0.0.2")
+	assert.Equal(t, "203.0.113.7", got)
+}
+
+func TestTrustedProxyConfig_AcceptsCIDRs(t *testing.T) {
+	got := ipOf(t, ipApp([]string{"0.0.0.0/8"}), "203.0.113.7")
+	assert.Equal(t, "203.0.113.7", got)
+}
+
+// X-Forwarded-For is caller-supplied: honoured from an untrusted peer, any
+// client could name its own IP.
+func TestTrustedProxyConfig_IgnoresForwardedHeaderFromUntrustedPeer(t *testing.T) {
+	got := ipOf(t, ipApp([]string{"192.0.2.1"}), "203.0.113.7")
+	assert.Equal(t, "0.0.0.0", got)
+}
+
+func TestTrustedProxyConfig_EmptyListTrustsNothing(t *testing.T) {
+	got := ipOf(t, ipApp(nil), "203.0.113.7")
+	assert.Equal(t, "0.0.0.0", got)
+}

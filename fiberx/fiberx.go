@@ -17,6 +17,27 @@ const (
 	IdempotencyKeyHeader = "Idempotency-Key"
 )
 
+// TrustedProxyConfig returns the Fiber config a service needs for c.IP() to
+// report the real caller when it sits behind a reverse proxy (fe-gateway) that
+// appends X-Forwarded-For. Without it c.IP() is the proxy's own address, which
+// then travels downstream as the cardholder's IP and fails PSP fraud checks.
+//
+// trustedProxies holds the addresses or CIDRs the forwarded header is honoured
+// from. Empty trusts nothing and c.IP() falls back to the peer address — the
+// safe default, because X-Forwarded-For is caller-supplied: honouring it from
+// anyone would let a client name its own IP, which is worse than reading the
+// socket. Only ever list proxies you control.
+func TrustedProxyConfig(trustedProxies []string) fiber.Config {
+	return fiber.Config{
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          trustedProxies,
+		// Without validation Fiber hands back the raw header, so a chained
+		// "client, proxy" chain would be reported verbatim as the IP.
+		EnableIPValidation: true,
+	}
+}
+
 // CorrelationID ensures every request carries a correlation id — taken from the
 // Correlation-ID header or generated — echoes it on the response, and stores it
 // where correlation.FromContext can read it — both on Locals (for readers of
