@@ -26,8 +26,18 @@ const (
 	defaultMaxBodyBytes = 64 << 10
 )
 
+// defaultRedactHeaders is always redacted; RedactHeaders adds to it.
+var defaultRedactHeaders = []string{
+	"Authorization",
+	"Cookie",
+	"Set-Cookie",
+	"Proxy-Authorization",
+	"X-Api-Key",
+}
+
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
-// matches by prefix.
+// matches by prefix. RedactHeaders extends the credential headers Record always
+// redacts; it cannot un-redact them.
 type RecordConfig struct {
 	SkipPaths     []string
 	SkipBodyPaths []string
@@ -50,9 +60,11 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 	for _, p := range cfg.SkipPaths {
 		skip[p] = struct{}{}
 	}
-	redactHeader := make(map[string]struct{}, len(cfg.RedactHeaders))
-	for _, h := range cfg.RedactHeaders {
-		redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
+	redactHeader := make(map[string]struct{}, len(defaultRedactHeaders)+len(cfg.RedactHeaders))
+	for _, hs := range [][]string{defaultRedactHeaders, cfg.RedactHeaders} {
+		for _, h := range hs {
+			redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -149,10 +161,9 @@ func readAndRestore(r *http.Request, limit int) []byte {
 	if r.Body == nil {
 		return nil
 	}
-	head, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)))
-	if err != nil {
-		return nil
-	}
+	// A read error still yields the bytes read so far; dropping them would leave
+	// the body drained and silently truncate the request.
+	head, _ := io.ReadAll(io.LimitReader(r.Body, int64(limit)))
 	body := r.Body
 	r.Body = struct {
 		io.Reader

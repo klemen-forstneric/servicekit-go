@@ -3,6 +3,7 @@ package httpx_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -90,6 +91,56 @@ func TestRecordRedactsHeaders(t *testing.T) {
 	assert.NotContains(t, headers["Authorization"], "super-secret")
 }
 
+// Redaction must not be opt-in: one forgotten RedactHeaders entry would dump
+// every live session token to the log.
+func TestRecordRedactsCredentialHeadersByDefault(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{})(okHandler())
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	for _, k := range []string{"Authorization", "Cookie", "Set-Cookie", "Proxy-Authorization", "X-Api-Key"} {
+		req.Header.Set(k, "super-secret")
+	}
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	headers, ok := l.value(t, 0, "headers").(map[string]string)
+	require.True(t, ok)
+	for k := range headers {
+		assert.Equal(t, "[redacted]", headers[k], k)
+	}
+	require.Len(t, headers, 5)
+}
+
+// A caller-supplied list extends the defaults rather than replacing them.
+func TestRecordRedactHeadersExtendsDefaults(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{RedactHeaders: []string{"X-Session-Token"}})(okHandler())
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set("X-Session-Token", "super-secret")
+	req.Header.Set("Authorization", "Bearer super-secret")
+	req.Header.Set("X-Trace", "keep-me")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	headers, ok := l.value(t, 0, "headers").(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "[redacted]", headers["X-Session-Token"])
+	assert.Equal(t, "[redacted]", headers["Authorization"])
+	assert.Equal(t, "keep-me", headers["X-Trace"])
+}
+
+func TestRecordRedactHeadersIsCaseInsensitive(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{RedactHeaders: []string{"x-session-token"}})(okHandler())
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set("X-Session-Token", "super-secret")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	headers, _ := l.value(t, 0, "headers").(map[string]string)
+	assert.Equal(t, "[redacted]", headers["X-Session-Token"])
+}
+
 func TestRecordRedactsQueryParams(t *testing.T) {
 	l := &recLogger{}
 	h := httpx.Record(l, httpx.RecordConfig{RedactQuery: []string{"token"}})(okHandler())
@@ -148,6 +199,38 @@ func TestRecordTruncatesLargeBodies(t *testing.T) {
 
 	body, _ := l.value(t, 0, "body").(string)
 	assert.Len(t, body, 8)
+}
+
+// headThenErrReader yields head once and fails on every read after it, the
+// shape of a connection that drops partway through an upload.
+type headThenErrReader struct {
+	head string
+	sent bool
+}
+
+func (r *headThenErrReader) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, errors.New("connection reset")
+	}
+	r.sent = true
+	return copy(p, r.head), nil
+}
+
+// A read error must not cost the handler the bytes Record already consumed for
+// logging — that is silent request truncation.
+func TestRecordRestoresBodyReadBeforeError(t *testing.T) {
+	l := &recLogger{}
+	var seen string
+	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		seen = string(b)
+		httpx.EmptyJSON(w, http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/x", &headThenErrReader{head: "HEADHEAD"})
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, "HEADHEAD", seen)
 }
 
 type hijackRecorder struct {
