@@ -43,36 +43,44 @@ func NewIPResolver(cidrs []string) (*IPResolver, error) {
 	return &IPResolver{trusted: trusted}, nil
 }
 
+// ClientIP walks X-Forwarded-For right to left and reports the first hop that is
+// not a trusted proxy. The header accumulates by appending, so anything left of
+// that hop is caller-supplied and must not be trusted. Any other outcome — an
+// untrusted peer, an absent header, a fully trusted chain, a malformed hop —
+// falls back to the peer address.
 func (r *IPResolver) ClientIP(req *http.Request) string {
-	peer := peerAddr(req)
+	raw := peerAddr(req)
 	// Unmap so a 4-in-6 peer (e.g. ::ffff:10.1.2.3) matches an IPv4 trusted prefix.
-	if addr, err := netip.ParseAddr(peer); err == nil {
-		peer = addr.Unmap().String()
+	peer, err := netip.ParseAddr(raw)
+	if err != nil {
+		return raw
 	}
+	peer = peer.Unmap()
 
 	if !r.trusts(peer) {
-		return peer
+		return peer.String()
 	}
 
 	forwarded := req.Header.Get(headerForwardedFor)
 	if forwarded == "" {
-		return peer
+		return peer.String()
 	}
 
-	first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-	addr, err := netip.ParseAddr(first)
-	if err != nil {
-		return peer
+	hops := strings.Split(forwarded, ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return peer.String()
+		}
+		if hop = hop.Unmap(); !r.trusts(hop) {
+			return hop.String()
+		}
 	}
-	return addr.Unmap().String()
+	return peer.String()
 }
 
-func (r *IPResolver) trusts(peer string) bool {
-	if r == nil || len(r.trusted) == 0 {
-		return false
-	}
-	addr, err := netip.ParseAddr(peer)
-	if err != nil {
+func (r *IPResolver) trusts(addr netip.Addr) bool {
+	if r == nil {
 		return false
 	}
 	for _, p := range r.trusted {

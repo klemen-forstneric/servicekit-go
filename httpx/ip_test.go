@@ -27,11 +27,37 @@ func TestClientIPHonoursForwardedForFromTrustedPeer(t *testing.T) {
 	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7")))
 }
 
-func TestClientIPTakesFirstHopOfChain(t *testing.T) {
+func TestClientIPWalksChainRightToLeftPastTrustedHops(t *testing.T) {
 	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
 	require.NoError(t, err)
 
 	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7, 10.1.2.3")))
+}
+
+// X-Forwarded-For accumulates left-to-right by appending, so the leftmost entry
+// is whatever the client sent. Only the rightmost untrusted hop is attested by a
+// proxy we trust.
+func TestClientIPIgnoresSpoofedLeftmostEntry(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	got := res.ClientIP(request("10.1.2.3:5555", "1.2.3.4, 198.51.100.9"))
+	assert.Equal(t, "198.51.100.9", got)
+	assert.NotEqual(t, "1.2.3.4", got)
+}
+
+func TestClientIPFullyTrustedChainFallsBackToPeer(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", "10.9.9.9, 10.8.8.8")))
+}
+
+func TestClientIPMalformedHopDuringWalkFallsBackToPeer(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7, garbage, 10.4.4.4")))
 }
 
 // The whole point: an untrusted caller cannot name its own IP.
@@ -93,7 +119,9 @@ func TestClientIPHonoursForwardedForFromTrustedIPv6Peer(t *testing.T) {
 	res, err := httpx.NewIPResolver([]string{"2001:db8::/32"})
 	require.NoError(t, err)
 
-	assert.Equal(t, "2001:db8::99", res.ClientIP(request("[2001:db8::5]:5555", "2001:db8::99")))
+	// The forwarded client sits outside the trusted prefix; one inside it would
+	// be indistinguishable from another proxy hop.
+	assert.Equal(t, "2606:4700::99", res.ClientIP(request("[2001:db8::5]:5555", "2606:4700::99")))
 }
 
 func TestClientIPIgnoresForwardedForFromUntrustedIPv6Peer(t *testing.T) {
@@ -125,9 +153,18 @@ func TestClientIPUnmapsIPv4MappedIPv6ForwardedFor(t *testing.T) {
 	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "::ffff:203.0.113.7")))
 }
 
-func TestClientIPEmptyFirstSegmentFallsBack(t *testing.T) {
+// The walk stops at the rightmost untrusted hop, so a blank segment further
+// left is never examined.
+func TestClientIPEmptyLeadingSegmentIsNeverExamined(t *testing.T) {
 	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
 	require.NoError(t, err)
 
-	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", ",203.0.113.7")))
+	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", ",203.0.113.7")))
+}
+
+func TestClientIPEmptyTrailingSegmentFallsBack(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7,")))
 }
