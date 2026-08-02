@@ -1,9 +1,11 @@
 package httpx
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -79,13 +81,18 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 			rec := &recorder{ResponseWriter: w, status: http.StatusOK, capture: logBody, limit: maxBody}
 			next.ServeHTTP(rec, r)
 
+			status := rec.status
+			if rec.hijacked {
+				status = http.StatusSwitchingProtocols
+			}
+
 			var respBody any
-			if logBody && rec.status != http.StatusSwitchingProtocols {
+			if logBody && status != http.StatusSwitchingProtocols {
 				respBody = decodeBody(rec.body.Bytes())
 			}
 
 			l.Info(r.Context(), "Returned HTTP response",
-				logFieldStatusCode, rec.status,
+				logFieldStatusCode, status,
 				logFieldHTTPMethod, r.Method,
 				logFieldPath, redactedURL(r, cfg.RedactQuery),
 				logFieldBody, respBody,
@@ -99,13 +106,27 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 // WebSocket upgrades depend on.
 type recorder struct {
 	http.ResponseWriter
-	status  int
-	body    bytes.Buffer
-	capture bool
-	limit   int
+	status   int
+	body     bytes.Buffer
+	capture  bool
+	limit    int
+	hijacked bool
 }
 
 func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Hijack is required because a reverse proxy performs a WebSocket upgrade by
+// hijacking and writing the 101 status line straight to the raw connection —
+// WriteHeader is never called, so this is the only signal we get.
+func (r *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	r.hijacked = true
+	r.capture = false
+	return h.Hijack()
+}
 
 func (r *recorder) WriteHeader(code int) {
 	r.status = code
@@ -122,20 +143,22 @@ func (r *recorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// readAndRestore reads at most limit bytes for logging and stitches the rest
+// of the body back unread, so a large upload is never fully buffered here.
 func readAndRestore(r *http.Request, limit int) []byte {
 	if r.Body == nil {
 		return nil
 	}
-	raw, err := io.ReadAll(r.Body)
-	_ = r.Body.Close()
+	head, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)))
 	if err != nil {
 		return nil
 	}
-	r.Body = io.NopCloser(bytes.NewReader(raw))
-	if len(raw) > limit {
-		return raw[:limit]
-	}
-	return raw
+	body := r.Body
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), body), body}
+	return head
 }
 
 func decodeBody(raw []byte) any {

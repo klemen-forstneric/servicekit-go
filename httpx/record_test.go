@@ -3,6 +3,7 @@ package httpx_test
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -174,18 +175,37 @@ func TestRecordResponseWriterSupportsHijack(t *testing.T) {
 	assert.True(t, rec.hijacked)
 }
 
-// A 101 response has no body to capture and the connection belongs to the
-// upgraded protocol afterwards.
+// A real WebSocket upgrade (as ReverseProxy performs it) never calls
+// WriteHeader — it hijacks and writes the 101 status line straight to the raw
+// connection. Record must learn about the upgrade from the hijack itself.
 func TestRecordDoesNotCaptureUpgradeBody(t *testing.T) {
 	l := &recLogger{}
-	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusSwitchingProtocols)
-		_, _ = w.Write([]byte("binary-frame-data"))
-	}))
+	rec := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
 
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/ws", nil))
+	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _, err := http.NewResponseController(w).Hijack()
+		require.NoError(t, err)
+	}))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ws", nil))
 
 	require.Len(t, l.lines, 2)
 	assert.Equal(t, 101, l.value(t, 1, "status_code"))
 	assert.Nil(t, l.value(t, 1, "body"))
+}
+
+// The bytes beyond MaxBodyBytes are stitched back onto the body unread, not
+// buffered, so a large upload still arrives at the handler in full.
+func TestRecordDoesNotTruncateBodyForHandler(t *testing.T) {
+	l := &recLogger{}
+	var seen string
+	h := httpx.Record(l, httpx.RecordConfig{MaxBodyBytes: 8})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		seen = string(b)
+		httpx.EmptyJSON(w, http.StatusOK)
+	}))
+
+	full := strings.Repeat("a", 100)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/x", strings.NewReader(full)))
+
+	assert.Equal(t, full, seen)
 }
