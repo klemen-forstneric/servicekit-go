@@ -116,9 +116,12 @@ func (w *commitWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+// A successful flush commits the response: net/http writes the header first if
+// the handler has not. A rejected one commits nothing.
 func (w *commitWriter) Flush() {
-	w.committed = true
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+	if err := http.NewResponseController(w.ResponseWriter).Flush(); err == nil {
+		w.committed = true
+	}
 }
 
 func (w *commitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {

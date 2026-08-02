@@ -195,6 +195,43 @@ func TestRecoverLeavesResponseAloneAfterBareWrite(t *testing.T) {
 	assert.Equal(t, "partial", w.Body.String())
 }
 
+// Flushing commits the response even with nothing written yet — net/http emits
+// the header on the way out — which is how a streamed response commits.
+func TestRecoverWritesNoEnvelopeAfterFlush(t *testing.T) {
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, http.NewResponseController(w).Flush())
+		panic("kaboom")
+	}))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+
+	assert.True(t, w.Flushed)
+	assert.Empty(t, w.Body.String())
+}
+
+// plainWriter is a bare ResponseWriter: it supports neither Flush nor Hijack.
+type plainWriter struct{ rec *httptest.ResponseRecorder }
+
+func (w plainWriter) Header() http.Header         { return w.rec.Header() }
+func (w plainWriter) Write(b []byte) (int, error) { return w.rec.Write(b) }
+func (w plainWriter) WriteHeader(code int)        { w.rec.WriteHeader(code) }
+
+// A flush the underlying writer refuses commits nothing, so the envelope is
+// still owed.
+func TestRecoverStillWritesEnvelopeAfterRejectedFlush(t *testing.T) {
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.(http.Flusher).Flush()
+		panic("kaboom")
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(plainWriter{rec: rec}, httptest.NewRequest("GET", "/", nil))
+
+	assert.Equal(t, 500, rec.Code)
+	assert.Equal(t, `{"data":null,"error":"internal server error"}`, rec.Body.String())
+}
+
 // A hijacked connection is committed too: the envelope would be written to a
 // writer whose response has already left through the raw conn.
 func TestRecoverWritesNoEnvelopeAfterHijack(t *testing.T) {
