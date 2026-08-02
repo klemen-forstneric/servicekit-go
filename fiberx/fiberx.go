@@ -10,11 +10,13 @@ import (
 	"github.com/klemen-forstneric/ember"
 	"github.com/klemen-forstneric/ember/correlation"
 	"github.com/klemen-forstneric/spark"
+
+	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
 
 const (
-	CorrelationIDHeader  = "Correlation-ID"
-	IdempotencyKeyHeader = "Idempotency-Key"
+	CorrelationIDHeader  = httpx.CorrelationIDHeader
+	IdempotencyKeyHeader = httpx.IdempotencyKeyHeader
 )
 
 // TrustedProxyConfig returns the Fiber config a service needs for c.IP() to
