@@ -13,13 +13,15 @@ import (
 	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
 
+// The envelope bytes must match fiberx exactly — the eight-service migration
+// rests on it — so these assert raw strings, not JSONEq.
 func TestJSONEnvelope(t *testing.T) {
 	w := httptest.NewRecorder()
 	httpx.JSON(w, http.StatusOK, map[string]int{"x": 1})
 
 	assert.Equal(t, 200, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
-	assert.JSONEq(t, `{"data":{"x":1},"error":null}`, w.Body.String())
+	assert.Equal(t, `{"data":{"x":1},"error":null}`, w.Body.String())
 }
 
 func TestEmptyJSONEnvelope(t *testing.T) {
@@ -27,7 +29,7 @@ func TestEmptyJSONEnvelope(t *testing.T) {
 	httpx.EmptyJSON(w, http.StatusAccepted)
 
 	assert.Equal(t, 202, w.Code)
-	assert.JSONEq(t, `{"data":null,"error":null}`, w.Body.String())
+	assert.Equal(t, `{"data":null,"error":null}`, w.Body.String())
 }
 
 func TestErrorEnvelope(t *testing.T) {
@@ -35,7 +37,7 @@ func TestErrorEnvelope(t *testing.T) {
 	httpx.Error(w, http.StatusBadRequest, errors.New("boom"))
 
 	assert.Equal(t, 400, w.Code)
-	assert.JSONEq(t, `{"data":null,"error":"boom"}`, w.Body.String())
+	assert.Equal(t, `{"data":null,"error":"boom"}`, w.Body.String())
 }
 
 func TestNotFoundEnvelope(t *testing.T) {
@@ -43,7 +45,7 @@ func TestNotFoundEnvelope(t *testing.T) {
 	httpx.NotFound(w, httptest.NewRequest("GET", "/nope", nil))
 
 	assert.Equal(t, 404, w.Code)
-	assert.JSONEq(t, `{"data":null,"error":"not found"}`, w.Body.String())
+	assert.Equal(t, `{"data":null,"error":"not found"}`, w.Body.String())
 }
 
 func TestMethodNotAllowedEnvelope(t *testing.T) {
@@ -51,7 +53,19 @@ func TestMethodNotAllowedEnvelope(t *testing.T) {
 	httpx.MethodNotAllowed(w, httptest.NewRequest("POST", "/x", nil))
 
 	assert.Equal(t, 405, w.Code)
-	assert.JSONEq(t, `{"data":null,"error":"method not allowed"}`, w.Body.String())
+	assert.Equal(t, `{"data":null,"error":"method not allowed"}`, w.Body.String())
+}
+
+// Encoding after WriteHeader would commit a success status and then emit a
+// truncated body.
+func TestJSONUnmarshalableValueYieldsErrorEnvelope(t *testing.T) {
+	w := httptest.NewRecorder()
+	httpx.JSON(w, http.StatusOK, struct {
+		Ch chan int `json:"ch"`
+	}{make(chan int)})
+
+	assert.Equal(t, 500, w.Code)
+	assert.Equal(t, `{"data":null,"error":"internal server error"}`, w.Body.String())
 }
 
 func TestHealthRoutes(t *testing.T) {
@@ -64,7 +78,7 @@ func TestHealthRoutes(t *testing.T) {
 
 		require.Equal(t, 200, resp.Code, path)
 		body, _ := io.ReadAll(resp.Body)
-		assert.JSONEq(t, `{"status":"ok"}`, string(body))
+		assert.Equal(t, `{"status":"ok"}`, string(body))
 	}
 }
 

@@ -147,6 +147,7 @@ func TestTrustedProxyConfig_EmptyListTrustsNothing(t *testing.T) {
 	assert.Equal(t, "0.0.0.0", got)
 }
 
+// httpx must emit these envelopes byte for byte, so pin the raw bytes here too.
 func TestJSONEnvelope(t *testing.T) {
 	app := fiber.New()
 	app.Get("/", func(c *fiber.Ctx) error { return fiberx.JSON(c, fiber.StatusOK, fiber.Map{"x": 1}) })
@@ -154,7 +155,7 @@ func TestJSONEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
-	assert.JSONEq(t, `{"data":{"x":1},"error":null}`, string(body))
+	assert.Equal(t, `{"data":{"x":1},"error":null}`, string(body))
 }
 
 func TestErrorEnvelope(t *testing.T) {
@@ -164,7 +165,7 @@ func TestErrorEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 400, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
-	assert.JSONEq(t, `{"data":null,"error":"boom"}`, string(body))
+	assert.Equal(t, `{"data":null,"error":"boom"}`, string(body))
 }
 
 func TestEmptyJSONEnvelope(t *testing.T) {
@@ -174,7 +175,7 @@ func TestEmptyJSONEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 202, resp.StatusCode)
 	body, _ := io.ReadAll(resp.Body)
-	assert.JSONEq(t, `{"data":null,"error":null}`, string(body))
+	assert.Equal(t, `{"data":null,"error":null}`, string(body))
 }
 
 func TestHealthRoutes(t *testing.T) {
@@ -185,6 +186,6 @@ func TestHealthRoutes(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 200, resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
-		assert.JSONEq(t, `{"status":"ok"}`, string(body))
+		assert.Equal(t, `{"status":"ok"}`, string(body))
 	}
 }

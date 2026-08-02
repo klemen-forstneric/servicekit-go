@@ -24,10 +24,19 @@ type envelope struct {
 	Error *string `json:"error"`
 }
 
+// Marshal before committing the status: an Encoder would write a newline fiberx
+// does not, and would pair a success status with a truncated body when the value
+// fails to marshal.
 func write(w http.ResponseWriter, status int, data any, errMsg *string) {
+	body, err := json.Marshal(envelope{Data: data, Error: errMsg})
+	if err != nil {
+		Error(w, http.StatusInternalServerError, ErrInternal)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(envelope{Data: data, Error: errMsg})
+	_, _ = w.Write(body)
 }
 
 func JSON(w http.ResponseWriter, status int, data any) { write(w, status, data, nil) }
