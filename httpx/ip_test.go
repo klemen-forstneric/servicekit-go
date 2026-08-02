@@ -168,3 +168,54 @@ func TestClientIPEmptyTrailingSegmentFallsBack(t *testing.T) {
 
 	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7,")))
 }
+
+// RFC 7230 §3.2.2: repeated field lines are the comma-joined list. Reading only
+// the first one walks a prefix of the chain, so the attacker-supplied leftmost
+// entry becomes the "rightmost untrusted hop".
+func TestClientIPJoinsRepeatedForwardedForFieldLines(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	req := request("10.1.2.3:5555", "")
+	req.Header.Add("X-Forwarded-For", "1.2.3.4")
+	req.Header.Add("X-Forwarded-For", "198.51.100.9")
+
+	assert.Equal(t, "198.51.100.9", res.ClientIP(req))
+}
+
+func TestClientIPJoinsRepeatedFieldLinesWithChains(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	req := request("10.1.2.3:5555", "")
+	req.Header.Add("X-Forwarded-For", "1.2.3.4")
+	req.Header.Add("X-Forwarded-For", "203.0.113.7, 10.1.2.3")
+
+	assert.Equal(t, "203.0.113.7", res.ClientIP(req))
+}
+
+// Azure Front Door appends ip:port by default; so does an ALB with
+// xff_client_port. Rejecting those reports the proxy as the cardholder IP.
+func TestClientIPAcceptsHopWithPort(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7:41234")))
+	assert.Equal(t, "2001:db8::1", res.ClientIP(request("10.1.2.3:5555", "[2001:db8::1]:41234")))
+}
+
+// netip.Prefix.Contains is false for any zoned address, so a zoned hop would
+// otherwise pass the trust check untested and be reported verbatim.
+func TestClientIPStripsZoneBeforeTrustCheck(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8", "fe80::/10"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7, fe80::1%eth0")))
+}
+
+func TestClientIPDropsZoneFromReportedHop(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "fe80::1", res.ClientIP(request("10.1.2.3:5555", "fe80::1%eth0")))
+}

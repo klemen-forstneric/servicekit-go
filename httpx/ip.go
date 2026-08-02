@@ -50,33 +50,50 @@ func NewIPResolver(cidrs []string) (*IPResolver, error) {
 // falls back to the peer address.
 func (r *IPResolver) ClientIP(req *http.Request) string {
 	raw := peerAddr(req)
-	// Unmap so a 4-in-6 peer (e.g. ::ffff:10.1.2.3) matches an IPv4 trusted prefix.
-	peer, err := netip.ParseAddr(raw)
-	if err != nil {
+	peer, ok := parseHop(raw)
+	if !ok {
 		return raw
 	}
-	peer = peer.Unmap()
 
 	if !r.trusts(peer) {
 		return peer.String()
 	}
 
-	forwarded := req.Header.Get(headerForwardedFor)
+	// Repeated field lines are semantically the comma-joined list (RFC 7230
+	// §3.2.2); Header.Get would see only a prefix of the chain.
+	forwarded := strings.Join(req.Header.Values(headerForwardedFor), ",")
 	if forwarded == "" {
 		return peer.String()
 	}
 
 	hops := strings.Split(forwarded, ",")
 	for i := len(hops) - 1; i >= 0; i-- {
-		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
-		if err != nil {
+		hop, ok := parseHop(strings.TrimSpace(hops[i]))
+		if !ok {
 			return peer.String()
 		}
-		if hop = hop.Unmap(); !r.trusts(hop) {
+		if !r.trusts(hop) {
 			return hop.String()
 		}
 	}
 	return peer.String()
+}
+
+// parseHop normalizes one address: proxies such as Azure Front Door append
+// ip:port, Unmap lets a 4-in-6 address match an IPv4 prefix, and a zone must go
+// because netip.Prefix.Contains rejects every zoned address.
+func parseHop(s string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		host, _, splitErr := net.SplitHostPort(s)
+		if splitErr != nil {
+			return netip.Addr{}, false
+		}
+		if addr, err = netip.ParseAddr(host); err != nil {
+			return netip.Addr{}, false
+		}
+	}
+	return addr.Unmap().WithZone(""), true
 }
 
 func (r *IPResolver) trusts(addr netip.Addr) bool {
