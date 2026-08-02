@@ -2,6 +2,8 @@ package fiberx_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http/httptest"
 	"testing"
 
@@ -68,12 +70,29 @@ func TestIdempotencyKey_PresentAndAbsent(t *testing.T) {
 	assert.False(t, *ok2)
 }
 
-type capLogger struct{ infos int }
+type capLogger struct {
+	infos int
+	kvs   [][]any
+}
 
-func (c *capLogger) Debug(context.Context, string, ...any)        {}
-func (c *capLogger) Info(context.Context, string, ...any)         { c.infos++ }
+func (c *capLogger) Debug(context.Context, string, ...any) {}
+func (c *capLogger) Info(_ context.Context, _ string, kvs ...any) {
+	c.infos++
+	c.kvs = append(c.kvs, kvs)
+}
 func (c *capLogger) Warn(context.Context, string, ...any)         {}
 func (c *capLogger) Error(context.Context, string, error, ...any) {}
+
+func (c *capLogger) value(t *testing.T, idx int, key string) any {
+	t.Helper()
+	require.Less(t, idx, len(c.kvs))
+	for i := 0; i+1 < len(c.kvs[idx]); i += 2 {
+		if c.kvs[idx][i] == key {
+			return c.kvs[idx][i+1]
+		}
+	}
+	return nil
+}
 
 func TestRecord_LogsAndSkips(t *testing.T) {
 	// logs request + response (2 Info calls) for a normal path
@@ -92,6 +111,29 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 	_, err = app.Test(httptest.NewRequest("GET", "/health", nil))
 	require.NoError(t, err)
 	assert.Equal(t, 0, cap.infos)
+}
+
+// Redaction must not be opt-in, and must cover the same headers httpx redacts —
+// the two packages run side by side through the migration.
+func TestRecord_RedactsCredentialHeadersByDefault(t *testing.T) {
+	cap := &capLogger{}
+	app := fiber.New()
+	app.Use(fiberx.Record(cap))
+	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	for _, k := range []string{"Authorization", "Cookie", "Set-Cookie", "Proxy-Authorization", "X-Api-Key"} {
+		req.Header.Set(k, "super-secret")
+	}
+	_, err := app.Test(req)
+	require.NoError(t, err)
+
+	headers, ok := cap.value(t, 0, "headers").(map[string]string)
+	require.True(t, ok)
+	for _, k := range []string{"Authorization", "Cookie", "Set-Cookie", "Proxy-Authorization", "X-Api-Key"} {
+		assert.Equal(t, "[redacted]", headers[k], k)
+	}
+	assert.Equal(t, "example.com", headers["Host"]) // everything else is logged as before
 }
 
 // ipApp echoes c.IP() so the trusted-proxy behaviour is observable. app.Test
@@ -143,4 +185,47 @@ func TestTrustedProxyConfig_IgnoresForwardedHeaderFromUntrustedPeer(t *testing.T
 func TestTrustedProxyConfig_EmptyListTrustsNothing(t *testing.T) {
 	got := ipOf(t, ipApp(nil), "203.0.113.7")
 	assert.Equal(t, "0.0.0.0", got)
+}
+
+// httpx must emit these envelopes byte for byte, so pin the raw bytes here too.
+func TestJSONEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.JSON(c, fiber.StatusOK, fiber.Map{"x": 1}) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, `{"data":{"x":1},"error":null}`, string(body))
+}
+
+func TestErrorEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.Error(c, fiber.StatusBadRequest, errors.New("boom")) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, `{"data":null,"error":"boom"}`, string(body))
+}
+
+func TestEmptyJSONEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.EmptyJSON(c, fiber.StatusAccepted) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 202, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, `{"data":null,"error":null}`, string(body))
+}
+
+func TestHealthRoutes(t *testing.T) {
+	app := fiber.New()
+	fiberx.SetupHealthRoutes(app)
+	for _, path := range []string{"/", "/health"} {
+		resp, err := app.Test(httptest.NewRequest("GET", path, nil))
+		require.NoError(t, err)
+		assert.Equal(t, 200, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, `{"status":"ok"}`, string(body))
+	}
 }
