@@ -88,3 +88,46 @@ func TestClientIPNilResolverTrustsNothing(t *testing.T) {
 	var res *httpx.IPResolver
 	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", "203.0.113.7")))
 }
+
+func TestClientIPHonoursForwardedForFromTrustedIPv6Peer(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"2001:db8::/32"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "2001:db8::99", res.ClientIP(request("[2001:db8::5]:5555", "2001:db8::99")))
+}
+
+func TestClientIPIgnoresForwardedForFromUntrustedIPv6Peer(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"2001:db8::/32"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "2001:db9::5", res.ClientIP(request("[2001:db9::5]:5555", "2001:db8::99")))
+}
+
+// The bug this fix round exists for: a 4-in-6 peer must still match an IPv4 trusted prefix.
+func TestClientIPTrustsIPv4MappedIPv6Peer(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "203.0.113.7", res.ClientIP(request("[::ffff:10.1.2.3]:5555", "203.0.113.7")))
+}
+
+func TestClientIPReturnsForwardedIPv6Address(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "2001:db8::1", res.ClientIP(request("10.1.2.3:5555", "2001:db8::1")))
+}
+
+func TestClientIPUnmapsIPv4MappedIPv6ForwardedFor(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "203.0.113.7", res.ClientIP(request("10.1.2.3:5555", "::ffff:203.0.113.7")))
+}
+
+func TestClientIPEmptyFirstSegmentFallsBack(t *testing.T) {
+	res, err := httpx.NewIPResolver([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "10.1.2.3", res.ClientIP(request("10.1.2.3:5555", ",203.0.113.7")))
+}

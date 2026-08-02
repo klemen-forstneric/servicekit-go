@@ -45,6 +45,11 @@ func NewIPResolver(cidrs []string) (*IPResolver, error) {
 
 func (r *IPResolver) ClientIP(req *http.Request) string {
 	peer := peerAddr(req)
+	// Unmap so a 4-in-6 peer (e.g. ::ffff:10.1.2.3) matches an IPv4 trusted prefix.
+	if addr, err := netip.ParseAddr(peer); err == nil {
+		peer = addr.Unmap().String()
+	}
+
 	if !r.trusts(peer) {
 		return peer
 	}
@@ -59,7 +64,7 @@ func (r *IPResolver) ClientIP(req *http.Request) string {
 	if err != nil {
 		return peer
 	}
-	return addr.String()
+	return addr.Unmap().String()
 }
 
 func (r *IPResolver) trusts(peer string) bool {
