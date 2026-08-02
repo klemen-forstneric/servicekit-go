@@ -2,6 +2,7 @@ package httpx_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -129,6 +130,85 @@ func TestRecoverPassesThroughWhenNoPanic(t *testing.T) {
 
 	assert.Equal(t, 200, w.Code)
 	assert.Equal(t, 0, l.errs)
+}
+
+// net/http defines ErrAbortHandler as "abort silently". ReverseProxy raises it
+// whenever copying an upstream response fails, which is the routine path for a
+// client disconnecting mid-response.
+func TestRecoverRepanicsErrAbortHandler(t *testing.T) {
+	l := &errLogger{}
+	h := httpx.Recover(l)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+
+	w := httptest.NewRecorder()
+	assert.PanicsWithError(t, http.ErrAbortHandler.Error(), func() {
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	})
+
+	assert.Equal(t, 0, l.errs)
+	assert.Empty(t, w.Body.String())
+}
+
+func TestRecoverRepanicsWrappedErrAbortHandler(t *testing.T) {
+	l := &errLogger{}
+	h := httpx.Recover(l)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(fmt.Errorf("copying response: %w", http.ErrAbortHandler))
+	}))
+
+	assert.Panics(t, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	})
+	assert.Equal(t, 0, l.errs)
+}
+
+// The envelope is only safe to emit while nothing has been committed; appending
+// it to a partial body would corrupt the response.
+func TestRecoverLeavesAlreadyWrittenResponseAlone(t *testing.T) {
+	l := &errLogger{}
+	h := httpx.Recover(l)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"partial":`))
+		panic("kaboom")
+	}))
+
+	w := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	})
+
+	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, `{"data":{"partial":`, w.Body.String())
+	assert.Equal(t, 1, l.errs)
+}
+
+// A bare Write commits the response just as much as WriteHeader does.
+func TestRecoverLeavesResponseAloneAfterBareWrite(t *testing.T) {
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		panic("kaboom")
+	}))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+
+	assert.Equal(t, "partial", w.Body.String())
+}
+
+// A hijacked connection is committed too: the envelope would be written to a
+// writer whose response has already left through the raw conn.
+func TestRecoverWritesNoEnvelopeAfterHijack(t *testing.T) {
+	rec := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _, err := http.NewResponseController(w).Hijack()
+		require.NoError(t, err)
+		panic("kaboom")
+	}))
+
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ws", nil))
+
+	assert.True(t, rec.hijacked)
+	assert.Empty(t, rec.Body.String())
 }
 
 func TestRecoverAcceptsNilLogger(t *testing.T) {
