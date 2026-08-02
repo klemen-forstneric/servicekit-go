@@ -2,6 +2,8 @@ package fiberx_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http/httptest"
 	"testing"
 
@@ -143,4 +145,46 @@ func TestTrustedProxyConfig_IgnoresForwardedHeaderFromUntrustedPeer(t *testing.T
 func TestTrustedProxyConfig_EmptyListTrustsNothing(t *testing.T) {
 	got := ipOf(t, ipApp(nil), "203.0.113.7")
 	assert.Equal(t, "0.0.0.0", got)
+}
+
+func TestJSONEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.JSON(c, fiber.StatusOK, fiber.Map{"x": 1}) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.JSONEq(t, `{"data":{"x":1},"error":null}`, string(body))
+}
+
+func TestErrorEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.Error(c, fiber.StatusBadRequest, errors.New("boom")) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.JSONEq(t, `{"data":null,"error":"boom"}`, string(body))
+}
+
+func TestEmptyJSONEnvelope(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return fiberx.EmptyJSON(c, fiber.StatusAccepted) })
+	resp, err := app.Test(httptest.NewRequest("GET", "/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, 202, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.JSONEq(t, `{"data":null,"error":null}`, string(body))
+}
+
+func TestHealthRoutes(t *testing.T) {
+	app := fiber.New()
+	fiberx.SetupHealthRoutes(app)
+	for _, path := range []string{"/", "/health"} {
+		resp, err := app.Test(httptest.NewRequest("GET", path, nil))
+		require.NoError(t, err)
+		assert.Equal(t, 200, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		assert.JSONEq(t, `{"status":"ok"}`, string(body))
+	}
 }
