@@ -3,6 +3,7 @@ package fiberx
 
 import (
 	"encoding/json"
+	"net/http"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -83,11 +84,16 @@ const (
 const headerForwardedFor = "X-Forwarded-For"
 
 // Record logs each request and its response. Paths in skipPaths are not logged
-// (e.g. health checks).
+// (e.g. health checks). Credential headers are always redacted, matching
+// httpx.Record.
 func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
 	skip := make(map[string]struct{}, len(skipPaths))
 	for _, p := range skipPaths {
 		skip[p] = struct{}{}
+	}
+	redactHeader := make(map[string]struct{})
+	for _, h := range httpx.DefaultRedactHeaders() {
+		redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
 	}
 
 	return func(c *fiber.Ctx) error {
@@ -109,7 +115,17 @@ func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
 
 		headers := make(map[string]string)
 		c.Request().Header.VisitAll(func(key, value []byte) {
-			headers[string(key)] = string(value)
+			k := http.CanonicalHeaderKey(string(key))
+			if _, ok := redactHeader[k]; ok {
+				headers[k] = httpx.RedactedValue
+				return
+			}
+			// VisitAll yields one call per value; httpx joins repeats the same way.
+			if prev, ok := headers[k]; ok {
+				headers[k] = prev + "," + string(value)
+				return
+			}
+			headers[k] = string(value)
 		})
 
 		remoteAddress := c.IP()

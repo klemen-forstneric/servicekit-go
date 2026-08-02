@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/klemen-forstneric/ember"
@@ -22,7 +23,9 @@ const (
 )
 
 const (
-	redactedValue       = "[redacted]"
+	// RedactedValue replaces every redacted header value and query parameter.
+	RedactedValue = "[redacted]"
+
 	defaultMaxBodyBytes = 64 << 10
 )
 
@@ -34,6 +37,10 @@ var defaultRedactHeaders = []string{
 	"Proxy-Authorization",
 	"X-Api-Key",
 }
+
+// DefaultRedactHeaders lists the credential headers Record always redacts. It
+// is exported so fiberx.Record redacts exactly the same set.
+func DefaultRedactHeaders() []string { return slices.Clone(defaultRedactHeaders) }
 
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
 // matches by prefix. RedactHeaders extends the credential headers Record always
@@ -188,7 +195,7 @@ func headers(r *http.Request, redact map[string]struct{}) map[string]string {
 	out := make(map[string]string, len(r.Header))
 	for k, v := range r.Header {
 		if _, ok := redact[k]; ok {
-			out[k] = redactedValue
+			out[k] = RedactedValue
 			continue
 		}
 		out[k] = strings.Join(v, ",")
@@ -204,7 +211,7 @@ func redactedURL(r *http.Request, redact []string) string {
 	q := u.Query()
 	for _, key := range redact {
 		if q.Has(key) {
-			q.Set(key, redactedValue)
+			q.Set(key, RedactedValue)
 		}
 	}
 	u.RawQuery = q.Encode()
