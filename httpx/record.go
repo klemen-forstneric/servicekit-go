@@ -129,15 +129,17 @@ func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // Hijack is required because a reverse proxy performs a WebSocket upgrade by
 // hijacking and writing the 101 status line straight to the raw connection —
-// WriteHeader is never called, so this is the only signal we get.
+// WriteHeader is never called, so this is the only signal we get. It delegates
+// to the response controller so a wrapper that only implements Unwrap is still
+// walked through.
 func (r *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := r.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, http.ErrNotSupported
+	conn, rw, err := http.NewResponseController(r.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
 	}
 	r.hijacked = true
 	r.capture = false
-	return h.Hijack()
+	return conn, rw, nil
 }
 
 func (r *recorder) WriteHeader(code int) {

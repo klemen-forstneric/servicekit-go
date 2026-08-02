@@ -243,6 +243,15 @@ func (h *hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, nil
 }
 
+// unwrapOnlyWriter is the Go 1.20+ wrapper convention: no Hijacker, no Flusher,
+// just Unwrap, which http.ResponseController walks.
+type unwrapOnlyWriter struct{ inner http.ResponseWriter }
+
+func (w unwrapOnlyWriter) Header() http.Header         { return w.inner.Header() }
+func (w unwrapOnlyWriter) Write(b []byte) (int, error) { return w.inner.Write(b) }
+func (w unwrapOnlyWriter) WriteHeader(code int)        { w.inner.WriteHeader(code) }
+func (w unwrapOnlyWriter) Unwrap() http.ResponseWriter { return w.inner }
+
 // Without Unwrap, http.NewResponseController cannot reach the real writer and
 // every WebSocket upgrade behind Record fails.
 func TestRecordResponseWriterSupportsHijack(t *testing.T) {
@@ -256,6 +265,22 @@ func TestRecordResponseWriterSupportsHijack(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ws", nil))
 
 	assert.True(t, rec.hijacked)
+}
+
+// A type assertion for http.Hijacker does not walk Unwrap, so recorder must ask
+// the response controller rather than assert on its immediate writer.
+func TestRecordHijacksThroughUnwrapOnlyWrapper(t *testing.T) {
+	l := &recLogger{}
+	rec := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _, err := http.NewResponseController(w).Hijack()
+		require.NoError(t, err)
+	}))
+	h.ServeHTTP(unwrapOnlyWriter{inner: rec}, httptest.NewRequest("GET", "/ws", nil))
+
+	assert.True(t, rec.hijacked)
+	assert.Equal(t, 101, l.value(t, 1, "status_code"))
 }
 
 // A real WebSocket upgrade (as ReverseProxy performs it) never calls

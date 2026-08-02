@@ -217,11 +217,11 @@ func (w plainWriter) Header() http.Header         { return w.rec.Header() }
 func (w plainWriter) Write(b []byte) (int, error) { return w.rec.Write(b) }
 func (w plainWriter) WriteHeader(code int)        { w.rec.WriteHeader(code) }
 
-// A flush the underlying writer refuses commits nothing, so the envelope is
-// still owed.
+// A flush the underlying writer refuses must report that refusal, and commits
+// nothing, so the envelope is still owed.
 func TestRecoverStillWritesEnvelopeAfterRejectedFlush(t *testing.T) {
 	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.(http.Flusher).Flush()
+		assert.ErrorIs(t, http.NewResponseController(w).Flush(), http.ErrNotSupported)
 		panic("kaboom")
 	}))
 
@@ -230,6 +230,35 @@ func TestRecoverStillWritesEnvelopeAfterRejectedFlush(t *testing.T) {
 
 	assert.Equal(t, 500, rec.Code)
 	assert.Equal(t, `{"data":null,"error":"internal server error"}`, rec.Body.String())
+}
+
+// A wrapper that only implements Unwrap (the Go 1.20+ convention, as otelhttp
+// and httpsnoop do) must not cost the chain its hijack support.
+func TestRecoverHijacksThroughUnwrapOnlyWrapper(t *testing.T) {
+	rec := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _, err := http.NewResponseController(w).Hijack()
+		require.NoError(t, err)
+		panic("kaboom")
+	}))
+
+	h.ServeHTTP(unwrapOnlyWriter{inner: rec}, httptest.NewRequest("GET", "/ws", nil))
+
+	assert.True(t, rec.hijacked)
+	assert.Empty(t, rec.Body.String())
+}
+
+func TestRecoverReportsHijackUnsupported(t *testing.T) {
+	h := httpx.Recover(&errLogger{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _, err := http.NewResponseController(w).Hijack()
+		assert.ErrorIs(t, err, http.ErrNotSupported)
+		panic("kaboom")
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(plainWriter{rec: rec}, httptest.NewRequest("GET", "/", nil))
+
+	assert.Equal(t, 500, rec.Code)
 }
 
 // A hijacked connection is committed too: the envelope would be written to a

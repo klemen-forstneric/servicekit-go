@@ -116,19 +116,25 @@ func (w *commitWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// A successful flush commits the response: net/http writes the header first if
-// the handler has not. A rejected one commits nothing.
-func (w *commitWriter) Flush() {
-	if err := http.NewResponseController(w.ResponseWriter).Flush(); err == nil {
-		w.committed = true
-	}
-}
-
-func (w *commitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := w.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, http.ErrNotSupported
+// FlushError rather than Flush: http.ResponseController prefers it, so a writer
+// that cannot flush still reports that instead of being masked by this wrapper.
+// A successful flush commits the response — net/http writes the header first if
+// the handler has not — a rejected one commits nothing.
+func (w *commitWriter) FlushError() error {
+	if err := http.NewResponseController(w.ResponseWriter).Flush(); err != nil {
+		return err
 	}
 	w.committed = true
-	return h.Hijack()
+	return nil
+}
+
+// Going through the response controller keeps the Unwrap chain walkable: a
+// type assertion here would stop at a wrapper that only implements Unwrap.
+func (w *commitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	w.committed = true
+	return conn, rw, nil
 }
