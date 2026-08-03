@@ -17,6 +17,7 @@ var (
 	ErrNotFound         = errors.New("not found")
 	ErrMethodNotAllowed = errors.New("method not allowed")
 	ErrInternal         = errors.New("internal server error")
+	ErrBodyTooLarge     = errors.New("request body too large")
 )
 
 type envelope struct {

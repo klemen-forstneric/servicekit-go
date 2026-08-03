@@ -138,3 +138,23 @@ func (w *commitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	w.committed = true
 	return conn, rw, nil
 }
+
+// MaxBody bounds the request body. A client that declares an oversized body is
+// rejected outright; one that under-declares or chunks is capped at the reader,
+// so whoever reads it sees an error once the limit is passed.
+//
+// Belongs in the chain rather than in whatever code happens to read the body —
+// otherwise routes that only proxy a body get no limit at all.
+func MaxBody(n int64) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ContentLength > n {
+				Error(w, http.StatusRequestEntityTooLarge, ErrBodyTooLarge)
+				return
+			}
+
+			r.Body = http.MaxBytesReader(w, r.Body, n)
+			next.ServeHTTP(w, r)
+		})
+	}
+}

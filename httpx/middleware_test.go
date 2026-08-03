@@ -3,8 +3,10 @@ package httpx_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/klemen-forstneric/ember/correlation"
@@ -287,4 +289,58 @@ func TestRecoverAcceptsNilLogger(t *testing.T) {
 		h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	})
 	assert.Equal(t, 500, w.Code)
+}
+
+func TestMaxBodyRejectsADeclaredOversizedBody(t *testing.T) {
+	var reached bool
+	h := httpx.MaxBody(16)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+
+	req := httptest.NewRequest("POST", "/x", strings.NewReader(strings.Repeat("a", 64)))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.JSONEq(t, `{"data":null,"error":"request body too large"}`, w.Body.String())
+	assert.False(t, reached, "the handler must not run")
+}
+
+// A client that lies about or omits Content-Length still gets capped, but only
+// once something reads the body — which is the handler's error to report.
+func TestMaxBodyCapsAnUnderdeclaredBody(t *testing.T) {
+	var readErr error
+	h := httpx.MaxBody(16)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, readErr = io.ReadAll(r.Body)
+	}))
+
+	req := httptest.NewRequest("POST", "/x", strings.NewReader(strings.Repeat("a", 64)))
+	req.ContentLength = -1
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	var tooLarge *http.MaxBytesError
+	assert.ErrorAs(t, readErr, &tooLarge)
+}
+
+func TestMaxBodyPassesAnAcceptableBodyThrough(t *testing.T) {
+	var got string
+	h := httpx.MaxBody(1 << 20)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = string(b)
+	}))
+
+	req := httptest.NewRequest("POST", "/x", strings.NewReader(`{"a":1}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, `{"a":1}`, got)
+}
+
+// A bodyless GET declares ContentLength 0 and must not be rejected.
+func TestMaxBodyIgnoresABodylessRequest(t *testing.T) {
+	var reached bool
+	h := httpx.MaxBody(16)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+
+	assert.True(t, reached)
 }
