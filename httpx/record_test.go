@@ -28,8 +28,10 @@ func (l *recLogger) Debug(_ context.Context, msg string, kvs ...any) {}
 func (l *recLogger) Info(_ context.Context, msg string, kvs ...any) {
 	l.lines = append(l.lines, line{msg: msg, kvs: kvs})
 }
-func (l *recLogger) Warn(_ context.Context, msg string, kvs ...any)       {}
-func (l *recLogger) Error(_ context.Context, _ string, _ error, _ ...any) {}
+func (l *recLogger) Warn(_ context.Context, msg string, kvs ...any) {}
+func (l *recLogger) Error(_ context.Context, msg string, err error, kvs ...any) {
+	l.lines = append(l.lines, line{msg: msg, kvs: append(kvs, "error", err)})
+}
 
 func (l *recLogger) value(t *testing.T, idx int, key string) any {
 	t.Helper()

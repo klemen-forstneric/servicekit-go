@@ -167,18 +167,26 @@ func (r *recorder) Write(b []byte) (int, error) {
 // readAndRestore reads at most limit bytes for logging and stitches the rest
 // of the body back unread, so a large upload is never fully buffered here.
 func readAndRestore(r *http.Request, limit int) []byte {
-	if r.Body == nil {
-		return nil
+	head, body := readAndRestoreBody(r.Body, limit)
+	r.Body = body
+	return head
+}
+
+// readAndRestoreBody reads at most limit bytes for logging and stitches the
+// rest back unread, so a large payload is never fully buffered here and the
+// caller still receives every byte.
+//
+// A read error still yields the bytes read so far; dropping them would leave
+// the body drained and silently truncate the payload.
+func readAndRestoreBody(body io.ReadCloser, limit int) ([]byte, io.ReadCloser) {
+	if body == nil {
+		return nil, nil
 	}
-	// A read error still yields the bytes read so far; dropping them would leave
-	// the body drained and silently truncate the request.
-	head, _ := io.ReadAll(io.LimitReader(r.Body, int64(limit)))
-	body := r.Body
-	r.Body = struct {
+	head, _ := io.ReadAll(io.LimitReader(body, int64(limit)))
+	return head, struct {
 		io.Reader
 		io.Closer
 	}{io.MultiReader(bytes.NewReader(head), body), body}
-	return head
 }
 
 func decodeBody(raw []byte) any {
