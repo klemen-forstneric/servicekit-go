@@ -43,11 +43,13 @@ func (c codec[E]) Unmarshal(b []byte) (any, error) {
 }
 
 func (c codec[E]) unmarshal(b []byte) (E, error) {
+	var empty E
+
 	var eb entityBlob
 	if err := json.Unmarshal(b, &eb); err != nil {
-		var empty E
 		return empty, err
 	}
+
 	return c.m.Unmarshal(context.Background(), &ember.MarshaledEntity{
 		ID:      eb.ID,
 		Version: ember.NewVersion(eb.Version),
