@@ -9,6 +9,13 @@ import (
 	sparkmw "github.com/klemen-forstneric/spark/middleware"
 )
 
+// entityBlob
+type entityBlob struct {
+	ID      string          `json:"id"`
+	Version uint64          `json:"version"`
+	Data    json.RawMessage `json:"data"`
+}
+
 // Adapt bridges an ember entity marshaler into a spark TypeCodec, so command
 // results that are entities round-trip through the same marshaler as the store
 // (migrations included) without spark importing ember.
@@ -16,14 +23,9 @@ func Adapt[E ember.Entity](m ember.EntityMarshaler[E]) sparkmw.TypeCodec {
 	return codec[E]{m: m}
 }
 
+// codec
 type codec[E ember.Entity] struct {
 	m ember.EntityMarshaler[E]
-}
-
-type entityBlob struct {
-	ID      string          `json:"id"`
-	Version uint64          `json:"version"`
-	Data    json.RawMessage `json:"data"`
 }
 
 func (c codec[E]) Marshal(v any) ([]byte, error) {
@@ -31,11 +33,17 @@ func (c codec[E]) Marshal(v any) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("emberx: expected %T, got %T", *new(E), v)
 	}
+
 	me, err := c.m.Marshal(context.Background(), e)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(entityBlob{ID: me.ID, Version: me.Version.Value(), Data: me.Data})
+
+	return json.Marshal(entityBlob{
+		ID:      me.ID,
+		Version: me.Version.Value(),
+		Data:    me.Data,
+	})
 }
 
 func (c codec[E]) Unmarshal(b []byte) (any, error) {
@@ -82,6 +90,7 @@ func (c sliceCodec[S, E]) Marshal(v any) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		blobs = append(blobs, b)
 	}
 
@@ -100,6 +109,7 @@ func (c sliceCodec[S, E]) Unmarshal(b []byte) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		s = append(s, e)
 	}
 
