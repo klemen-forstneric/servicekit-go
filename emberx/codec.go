@@ -74,6 +74,7 @@ func AdaptSlice[S ~[]E, E ember.Entity](m ember.EntityMarshaler[E]) sparkmw.Type
 	return sliceCodec[S, E]{elem: codec[E]{m: m}}
 }
 
+// sliceCodec
 type sliceCodec[S ~[]E, E ember.Entity] struct {
 	elem codec[E]
 }
