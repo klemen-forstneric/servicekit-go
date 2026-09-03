@@ -2,9 +2,9 @@ package rsql
 
 import "fmt"
 
-// Parse turns an RSQL string into a syntax tree. It validates syntax only —
-// selectors, operators and values are checked against a Schema by Bind.
-func Parse(s string) (Node, error) {
+// parse turns an RSQL string into a syntax tree. Syntax only - selectors,
+// operators and values are checked against a Schema by Bind.
+func parse(s string) (node, error) {
 	p := &parser{lex: &lexer{src: []rune(s)}}
 	if err := p.advance(); err != nil {
 		return nil, err
@@ -33,20 +33,20 @@ func (p *parser) advance() error {
 	return nil
 }
 
-func (p *parser) parseOr() (Node, error) {
-	return p.parseBinary(tokOr, p.parseAnd, func(ns []Node) Node { return &Or{Nodes: ns} })
+func (p *parser) parseOr() (node, error) {
+	return p.parseBinary(tokOr, p.parseAnd, func(ns []node) node { return &or{Nodes: ns} })
 }
 
-func (p *parser) parseAnd() (Node, error) {
-	return p.parseBinary(tokAnd, p.parseConstraint, func(ns []Node) Node { return &And{Nodes: ns} })
+func (p *parser) parseAnd() (node, error) {
+	return p.parseBinary(tokAnd, p.parseConstraint, func(ns []node) node { return &and{Nodes: ns} })
 }
 
-func (p *parser) parseBinary(sep tokenKind, operand func() (Node, error), join func([]Node) Node) (Node, error) {
+func (p *parser) parseBinary(sep tokenKind, operand func() (node, error), join func([]node) node) (node, error) {
 	first, err := operand()
 	if err != nil {
 		return nil, err
 	}
-	nodes := []Node{first}
+	nodes := []node{first}
 	for p.tok.kind == sep {
 		if err := p.advance(); err != nil {
 			return nil, err
@@ -66,7 +66,7 @@ func (p *parser) parseBinary(sep tokenKind, operand func() (Node, error), join f
 // parseConstraint resolves the only place the grammar looks ambiguous: a "("
 // here is always a group, because a selector is unreserved-str and "(" is
 // reserved. Argument lists are reachable only after a comparison operator.
-func (p *parser) parseConstraint() (Node, error) {
+func (p *parser) parseConstraint() (node, error) {
 	if p.tok.kind == tokLParen {
 		if err := p.advance(); err != nil {
 			return nil, err
@@ -86,7 +86,7 @@ func (p *parser) parseConstraint() (Node, error) {
 	return p.parseComparison()
 }
 
-func (p *parser) parseComparison() (Node, error) {
+func (p *parser) parseComparison() (node, error) {
 	if p.tok.kind != tokValue {
 		return nil, fmt.Errorf("rsql: %d: expected a selector, got %q", p.tok.pos, p.tok.text)
 	}
@@ -108,7 +108,7 @@ func (p *parser) parseComparison() (Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Comparison{Selector: selector, Op: op, Args: args}, nil
+	return &comparison{Selector: selector, Op: op, Args: args}, nil
 }
 
 func (p *parser) parseArguments() ([]string, error) {

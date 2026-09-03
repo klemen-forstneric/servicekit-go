@@ -3,7 +3,6 @@ module github.com/klemen-forstneric/servicekit-go
 go 1.26.3
 
 require (
-	github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression v1.8.63
 	github.com/gofiber/fiber/v2 v2.52.13
 	github.com/google/uuid v1.6.0
 	github.com/klemen-forstneric/ember v0.0.0-20260723070356-578393179ea2
@@ -14,10 +13,6 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.20.63 // indirect
-	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.63.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.36.8 // indirect
-	github.com/aws/smithy-go v1.27.10 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect

@@ -25,7 +25,7 @@ func (s *rsqlSuite) SetupTest() {
 		"creator_id":   {Column: "creator_id", Kind: rsql.KindString},
 		"media_format": {Column: "media_format", Kind: rsql.KindString, Enum: []string{"image", "video", "audio"}},
 		"rating":       {Column: "rating", Kind: rsql.KindString, Enum: []string{"sfw", "mature", "nsfw", "adult"}},
-		"tags":         {Column: "tags", Kind: rsql.KindString, Repeated: true},
+		"tags":         {Column: "tags", Kind: rsql.KindString},
 		"create_time":  {Column: "created_at", Kind: rsql.KindTime},
 		"price":        {Column: "price", Kind: rsql.KindInt},
 	}
@@ -36,13 +36,8 @@ func (s *rsqlSuite) bind(filter string) (rsql.Bound, error) {
 	return bindFilter(s.schema, s.limits, filter)
 }
 
-// bindFilter is shared with the split tests, which need a different schema.
 func bindFilter(schema rsql.Schema, limits rsql.Limits, filter string) (rsql.Bound, error) {
-	n, err := rsql.Parse(filter)
-	if err != nil {
-		return nil, err
-	}
-	return rsql.Bind(n, schema, limits)
+	return rsql.Bind(filter, schema, limits)
 }
 
 // mustCanonical binds and canonicalises in one step. Canonical form is the

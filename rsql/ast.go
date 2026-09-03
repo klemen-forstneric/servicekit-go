@@ -27,22 +27,22 @@ var operators = map[string]Operator{
 	"=out=": OpNotIn, "=nin=": OpNotIn,
 }
 
-// Node is an untyped syntax node. Parse produces these; nothing here knows
-// about a schema or a datastore.
-type Node interface {
+// node is an untyped syntax node, the parser's output and the binder's input.
+// Nothing here knows about a schema or a datastore.
+type node interface {
 	node()
 }
 
-type And struct{ Nodes []Node }
+type and struct{ Nodes []node }
 
-type Or struct{ Nodes []Node }
+type or struct{ Nodes []node }
 
-type Comparison struct {
+type comparison struct {
 	Selector string
 	Op       Operator
 	Args     []string
 }
 
-func (*And) node()        {}
-func (*Or) node()         {}
-func (*Comparison) node() {}
+func (*and) node()        {}
+func (*or) node()         {}
+func (*comparison) node() {}

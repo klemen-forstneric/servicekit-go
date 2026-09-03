@@ -30,12 +30,6 @@ type Field struct {
 	Ops []Operator
 	// Enum, when set, is the closed set of accepted values.
 	Enum []string
-	// Repeated marks an array attribute, where equality means "contains".
-	Repeated bool
-	// Store names the datastore holding this attribute. Split partitions a
-	// filter by it. Empty is a store name like any other, so a single-store
-	// schema needs no annotation.
-	Store string
 }
 
 type Schema map[string]Field
@@ -81,9 +75,14 @@ func (k Kind) ops() []Operator {
 	}
 }
 
-// Bind validates a syntax tree against a Schema and Limits, coercing every
-// value to its declared type.
-func Bind(n Node, s Schema, lim Limits) (Bound, error) {
+// Bind parses an RSQL expression and validates it against a Schema and Limits,
+// coercing every value to its declared type. Syntax errors and schema errors
+// both surface here; there is no half-bound intermediate to hold wrong.
+func Bind(expr string, s Schema, lim Limits) (Bound, error) {
+	n, err := parse(expr)
+	if err != nil {
+		return nil, err
+	}
 	b := binder{schema: s, limits: lim}
 	out, err := b.walk(n, 1)
 	if err != nil {
@@ -105,32 +104,32 @@ type binder struct {
 	disjunctions int
 }
 
-func (b *binder) walk(n Node, depth int) (Bound, error) {
+func (b *binder) walk(n node, depth int) (Bound, error) {
 	if b.limits.MaxDepth > 0 && depth > b.limits.MaxDepth {
 		return nil, fmt.Errorf("rsql: filter nests deeper than the limit of %d", b.limits.MaxDepth)
 	}
 	switch t := n.(type) {
-	case *And:
+	case *and:
 		nodes, err := b.walkAll(t.Nodes, depth)
 		if err != nil {
 			return nil, err
 		}
 		return &BoundAnd{Nodes: nodes}, nil
-	case *Or:
+	case *or:
 		b.disjunctions += len(t.Nodes) - 1
 		nodes, err := b.walkAll(t.Nodes, depth)
 		if err != nil {
 			return nil, err
 		}
 		return &BoundOr{Nodes: nodes}, nil
-	case *Comparison:
+	case *comparison:
 		b.comparisons++
 		return b.comparison(t)
 	}
 	return nil, fmt.Errorf("rsql: unsupported node %T", n)
 }
 
-func (b *binder) walkAll(ns []Node, depth int) ([]Bound, error) {
+func (b *binder) walkAll(ns []node, depth int) ([]Bound, error) {
 	out := make([]Bound, 0, len(ns))
 	for _, n := range ns {
 		bn, err := b.walk(n, depth+1)
@@ -142,7 +141,7 @@ func (b *binder) walkAll(ns []Node, depth int) ([]Bound, error) {
 	return out, nil
 }
 
-func (b *binder) comparison(c *Comparison) (Bound, error) {
+func (b *binder) comparison(c *comparison) (Bound, error) {
 	f, ok := b.schema[c.Selector]
 	if !ok {
 		return nil, fmt.Errorf("rsql: %q is not a filterable field", c.Selector)
@@ -153,11 +152,6 @@ func (b *binder) comparison(c *Comparison) (Bound, error) {
 	allowed := f.Ops
 	if len(allowed) == 0 {
 		allowed = f.Kind.ops()
-	}
-	if f.Repeated {
-		allowed = slices.DeleteFunc(slices.Clone(allowed), func(o Operator) bool {
-			return o == OpGt || o == OpGe || o == OpLt || o == OpLe
-		})
 	}
 	if !slices.Contains(allowed, c.Op) {
 		return nil, fmt.Errorf("rsql: operator %q is not allowed on %q", c.Op, c.Selector)
@@ -175,14 +169,6 @@ func (b *binder) comparison(c *Comparison) (Bound, error) {
 		values = append(values, v)
 	}
 	return &BoundComparison{Selector: c.Selector, Field: f, Op: c.Op, Values: values}, nil
-}
-
-// Comparison builds a bound predicate directly, applying the same allowlist,
-// operator and coercion rules as a parsed one. Use it to add server-enforced
-// constraints a caller cannot express or override.
-func (s Schema) Comparison(selector string, op Operator, values ...string) (Bound, error) {
-	b := binder{schema: s}
-	return b.comparison(&Comparison{Selector: selector, Op: op, Args: values})
 }
 
 func coerce(raw string, f Field) (any, error) {

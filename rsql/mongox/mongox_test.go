@@ -24,16 +24,14 @@ func (s *mongoxSuite) SetupTest() {
 	s.schema = rsql.Schema{
 		"creator_id":  {Column: "creator_id", Kind: rsql.KindString},
 		"rating":      {Column: "rating", Kind: rsql.KindString, Enum: []string{"sfw", "nsfw"}},
-		"tags":        {Column: "tags", Kind: rsql.KindString, Repeated: true},
+		"tags":        {Column: "tags", Kind: rsql.KindString},
 		"create_time": {Column: "created_at", Kind: rsql.KindTime},
 		"price":       {Column: "price", Kind: rsql.KindInt},
 	}
 }
 
 func (s *mongoxSuite) filter(expr string) mongox.Filter {
-	n, err := rsql.Parse(expr)
-	s.Require().NoError(err, expr)
-	b, err := rsql.Bind(n, s.schema, rsql.Limits{})
+	b, err := rsql.Bind(expr, s.schema, rsql.Limits{})
 	s.Require().NoError(err, expr)
 	f, err := mongox.ToFilter(b)
 	s.Require().NoError(err, expr)

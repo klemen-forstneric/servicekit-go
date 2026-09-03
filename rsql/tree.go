@@ -41,30 +41,6 @@ func combine(nodes []Bound, or bool) Bound {
 	return &BoundAnd{Nodes: flat}
 }
 
-// Walk visits every node depth-first, parents before children. Returning false
-// stops descent into that node's children.
-func Walk(b Bound, fn func(Bound) bool) {
-	if b == nil || !fn(b) {
-		return
-	}
-	for _, n := range children(b) {
-		Walk(n, fn)
-	}
-}
-
-// Comparisons collects every predicate on the named selector. Reading what the
-// caller asked for — say, which creator ids — before deciding what to run.
-func Comparisons(b Bound, selector string) []*BoundComparison {
-	var out []*BoundComparison
-	Walk(b, func(n Bound) bool {
-		if c, ok := n.(*BoundComparison); ok && c.Selector == selector {
-			out = append(out, c)
-		}
-		return true
-	})
-	return out
-}
-
 // Rewrite rebuilds the tree bottom-up, replacing each node with fn's result.
 // Returning nil drops the node, and its parent collapses through All/Any, so a
 // predicate can be removed without leaving an empty conjunction behind.
@@ -87,14 +63,4 @@ func rewriteAll(nodes []Bound, fn func(Bound) Bound) []Bound {
 		out = append(out, Rewrite(n, fn))
 	}
 	return out
-}
-
-func children(b Bound) []Bound {
-	switch t := b.(type) {
-	case *BoundAnd:
-		return t.Nodes
-	case *BoundOr:
-		return t.Nodes
-	}
-	return nil
 }
