@@ -12,6 +12,7 @@ import (
 	"github.com/klemen-forstneric/ember/correlation"
 	"github.com/klemen-forstneric/spark"
 
+	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
 
@@ -173,10 +174,14 @@ func EmptyJSON(c *fiber.Ctx, status int) error {
 }
 
 func Error(c *fiber.Ctx, status int, err error) error {
-	return c.Status(status).JSON(fiber.Map{
+	body := fiber.Map{
 		"data":  nil,
 		"error": err.Error(),
-	})
+	}
+	if code := errorsx.Code(err); code != "" {
+		body["code"] = code
+	}
+	return c.Status(status).JSON(body)
 }
 
 func SetupHealthRoutes(a *fiber.App) {

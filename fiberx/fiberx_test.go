@@ -3,6 +3,7 @@ package fiberx_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/fiberx"
 )
 
@@ -228,4 +230,22 @@ func TestHealthRoutes(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, `{"status":"ok"}`, string(body))
 	}
+}
+
+func TestError_IncludesCodeOnlyWhenCoded(t *testing.T) {
+	coded := errorsx.New("thing_missing", "pkg: thing missing")
+	app := fiber.New()
+	app.Get("/coded", func(c *fiber.Ctx) error { return fiberx.Error(c, fiber.StatusConflict, fmt.Errorf("%w: x", coded)) })
+	app.Get("/plain", func(c *fiber.Ctx) error { return fiberx.Error(c, fiber.StatusBadRequest, errors.New("plain")) })
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/coded", nil))
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, fiber.StatusConflict, resp.StatusCode)
+	assert.JSONEq(t, `{"data":null,"error":"pkg: thing missing: x","code":"thing_missing"}`, string(body))
+
+	resp, err = app.Test(httptest.NewRequest("GET", "/plain", nil))
+	require.NoError(t, err)
+	body, _ = io.ReadAll(resp.Body)
+	assert.JSONEq(t, `{"data":null,"error":"plain"}`, string(body))
 }

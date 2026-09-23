@@ -1,16 +1,17 @@
 package money
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/klemen-forstneric/servicekit-go/errorsx"
 )
 
 // ErrInvalidCurrency is returned when a currency is not a 3–5 character
 // alphanumeric code.
-var ErrInvalidCurrency = errors.New("money: invalid currency")
+var ErrInvalidCurrency = errorsx.New("invalid_currency", "money: invalid currency")
 
 // Money is a general-purpose monetary amount. It carries no domain rules about
 // where it is used — in particular it does not reject negative amounts, so it

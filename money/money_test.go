@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/money"
 )
 
@@ -58,4 +59,10 @@ func TestZero_KeepsCurrencyAndClearsAmount(t *testing.T) {
 	assert.Equal(t, "USD", z.Currency)
 	// Decimal holds a pointer, so confirm the receiver is untouched.
 	assert.True(t, m.Amount.Equal(decimal.NewFromInt(10)))
+}
+
+func TestNew_InvalidCurrencyIsCoded(t *testing.T) {
+	_, err := money.New(decimal.Zero, "X")
+	assert.Equal(t, "invalid_currency", errorsx.Code(err))
+	assert.ErrorIs(t, err, money.ErrInvalidCurrency)
 }
