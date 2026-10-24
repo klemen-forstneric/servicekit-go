@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -115,7 +114,7 @@ func Record(l ember.LoggerCtx, cfg httpx.RecordConfig) fiber.Handler {
 		}
 
 		ctx := c.Context()
-		logBody := !hasPrefix(c.Path(), cfg.SkipBodyPaths)
+		logBody := cfg.LogsBody(c.Method(), c.Path())
 		path := redactedURL(c.OriginalURL(), cfg.RedactQuery)
 
 		var reqBody any
@@ -199,15 +198,6 @@ func redactedURL(uri string, redact []string) string {
 	}
 	u.RawQuery = q.Encode()
 	return u.RequestURI()
-}
-
-func hasPrefix(path string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
 }
 
 func JSON(c *fiber.Ctx, status int, data interface{}) error {

@@ -168,6 +168,21 @@ func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`{"token":"t"}`), cap.value(t, 3, "body"))
 }
 
+func TestRecord_SkipsBodiesForARoute(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{SkipBodyRoutes: []httpx.Route{{Method: "POST", Path: "/api/x"}}}, `{"a":1}`)
+
+	_, err := app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader(`{"a":1}`)))
+	require.NoError(t, err)
+	_, err = app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+
+	require.Equal(t, 4, cap.infos, "the request and response lines are still logged")
+	assert.Nil(t, cap.value(t, 0, "body"))
+	assert.Nil(t, cap.value(t, 1, "body"))
+	assert.Equal(t, json.RawMessage(`{"a":1}`), cap.value(t, 3, "body"), "other routes keep their bodies")
+}
+
 func TestRecord_TruncatesLargeBodies(t *testing.T) {
 	cap := &capLogger{}
 	app := recordApp(cap, httpx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
