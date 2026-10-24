@@ -26,9 +26,7 @@ const (
 	// RedactedValue replaces every redacted header value and query parameter.
 	RedactedValue = "[redacted]"
 
-	// DefaultMaxBodyBytes is how much of a body Record logs when MaxBodyBytes
-	// is not set. fiberx.Record uses the same limit.
-	DefaultMaxBodyBytes = 64 << 10
+	defaultMaxBodyBytes = 64 << 10
 )
 
 // defaultRedactHeaders is always redacted; RedactHeaders adds to it.
@@ -72,7 +70,7 @@ func (r Route) matches(method, path string) bool {
 }
 
 // LogsBody reports whether Record logs the bodies of a request to method and
-// path. fiberx.Record asks the same question.
+// path.
 func (c RecordConfig) LogsBody(method, path string) bool {
 	if hasPrefix(path, c.SkipBodyPaths) {
 		return false
@@ -92,7 +90,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 	}
 	maxBody := cfg.MaxBodyBytes
 	if maxBody <= 0 {
-		maxBody = DefaultMaxBodyBytes
+		maxBody = defaultMaxBodyBytes
 	}
 
 	skip := make(map[string]struct{}, len(cfg.SkipPaths))

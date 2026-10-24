@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -85,17 +86,60 @@ const (
 
 const headerForwardedFor = "X-Forwarded-For"
 
-// Record logs each request and its response, with the same config and the same
-// limits as httpx.Record: SkipPaths matches exactly, SkipBodyPaths by prefix,
-// credential headers are always redacted, and a body is logged up to
-// MaxBodyBytes.
-func Record(l ember.LoggerCtx, cfg httpx.RecordConfig) fiber.Handler {
+// DefaultMaxBodyBytes is how much of a body Record logs when MaxBodyBytes is
+// not set.
+const DefaultMaxBodyBytes = 64 << 10
+
+// RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
+// matches by prefix; SkipBodyRoutes matches a method and an exact path.
+// RedactHeaders extends the credential headers Record always redacts; it cannot
+// un-redact them.
+type RecordConfig struct {
+	SkipPaths      []string
+	SkipBodyPaths  []string
+	SkipBodyRoutes []Route
+	RedactQuery    []string
+	RedactHeaders  []string
+	MaxBodyBytes   int
+}
+
+// Route is one endpoint: a method and an exact path. An empty Method is GET.
+type Route struct {
+	Method string
+	Path   string
+}
+
+func (r Route) matches(method, path string) bool {
+	m := r.Method
+	if m == "" {
+		m = http.MethodGet
+	}
+	return path == r.Path && strings.EqualFold(method, m)
+}
+
+// LogsBody reports whether Record logs the bodies of a request to method and
+// path.
+func (c RecordConfig) LogsBody(method, path string) bool {
+	if hasPrefix(path, c.SkipBodyPaths) {
+		return false
+	}
+	for _, r := range c.SkipBodyRoutes {
+		if r.matches(method, path) {
+			return false
+		}
+	}
+	return true
+}
+
+// Record logs each request and its response. Credential headers are always
+// redacted, and a body is logged up to MaxBodyBytes.
+func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 	if l == nil {
 		l = ember.NopLogger
 	}
 	maxBody := cfg.MaxBodyBytes
 	if maxBody <= 0 {
-		maxBody = httpx.DefaultMaxBodyBytes
+		maxBody = DefaultMaxBodyBytes
 	}
 	skip := make(map[string]struct{}, len(cfg.SkipPaths))
 	for _, p := range cfg.SkipPaths {
@@ -170,7 +214,7 @@ func Record(l ember.LoggerCtx, cfg httpx.RecordConfig) fiber.Handler {
 }
 
 // bodyForLog keeps at most limit bytes. A cut JSON body is no longer valid JSON,
-// so it is logged as a string, as httpx does.
+// so it is logged as a string.
 func bodyForLog(raw []byte, limit int) any {
 	raw = raw[:min(len(raw), limit)]
 	if len(raw) == 0 {
@@ -229,4 +273,13 @@ func SetupHealthRoutes(a *fiber.App) {
 
 	a.Get("/", health)
 	a.Get("/health", health)
+}
+
+func hasPrefix(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }

@@ -18,7 +18,6 @@ import (
 
 	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/fiberx"
-	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
 
 func TestCorrelationID_GeneratesAndEchoes(t *testing.T) {
@@ -103,7 +102,7 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 	// logs request + response (2 Info calls) for a normal path
 	cap := &capLogger{}
 	app := fiber.New()
-	app.Use(fiberx.Record(cap, httpx.RecordConfig{SkipPaths: []string{"/health"}}))
+	app.Use(fiberx.Record(cap, fiberx.RecordConfig{SkipPaths: []string{"/health"}}))
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
 	app.Get("/health", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
@@ -123,7 +122,7 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 func TestRecord_RedactsCredentialHeadersByDefault(t *testing.T) {
 	cap := &capLogger{}
 	app := fiber.New()
-	app.Use(fiberx.Record(cap, httpx.RecordConfig{}))
+	app.Use(fiberx.Record(cap, fiberx.RecordConfig{}))
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
 	req := httptest.NewRequest("GET", "/x", nil)
@@ -143,7 +142,7 @@ func TestRecord_RedactsCredentialHeadersByDefault(t *testing.T) {
 
 // recordApp serves POST /api/x and GET /auth/token through Record, each
 // answering with body.
-func recordApp(cap *capLogger, cfg httpx.RecordConfig, body string) *fiber.App {
+func recordApp(cap *capLogger, cfg fiberx.RecordConfig, body string) *fiber.App {
 	app := fiber.New()
 	app.Use(fiberx.Record(cap, cfg))
 	h := func(c *fiber.Ctx) error { return c.SendString(body) }
@@ -154,7 +153,7 @@ func recordApp(cap *capLogger, cfg httpx.RecordConfig, body string) *fiber.App {
 
 func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{SkipBodyPaths: []string{"/auth/"}}, `{"token":"t"}`)
+	app := recordApp(cap, fiberx.RecordConfig{SkipBodyPaths: []string{"/auth/"}}, `{"token":"t"}`)
 
 	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
 	require.NoError(t, err)
@@ -168,9 +167,32 @@ func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`{"token":"t"}`), cap.value(t, 3, "body"))
 }
 
+func TestRecordConfig_LogsBody(t *testing.T) {
+	cfg := fiberx.RecordConfig{
+		SkipBodyPaths:  []string{"/auth/"},
+		SkipBodyRoutes: []fiberx.Route{{Path: "/creators"}, {Method: "POST", Path: "/uploads"}},
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		logs         bool
+	}{
+		{"GET", "/creators", false},
+		{"get", "/creators", false},
+		{"POST", "/creators", true},
+		{"GET", "/creators/c1", true},
+		{"POST", "/uploads", false},
+		{"GET", "/uploads", true},
+		{"POST", "/auth/login", false},
+		{"GET", "/chats", true},
+	} {
+		assert.Equal(t, tc.logs, cfg.LogsBody(tc.method, tc.path), "%s %s", tc.method, tc.path)
+	}
+}
+
 func TestRecord_SkipsBodiesForARoute(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{SkipBodyRoutes: []httpx.Route{{Method: "POST", Path: "/api/x"}}}, `{"a":1}`)
+	app := recordApp(cap, fiberx.RecordConfig{SkipBodyRoutes: []fiberx.Route{{Method: "POST", Path: "/api/x"}}}, `{"a":1}`)
 
 	_, err := app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader(`{"a":1}`)))
 	require.NoError(t, err)
@@ -185,7 +207,7 @@ func TestRecord_SkipsBodiesForARoute(t *testing.T) {
 
 func TestRecord_TruncatesLargeBodies(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
+	app := recordApp(cap, fiberx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
 
 	resp, err := app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader("0123456789abcdef")))
 	require.NoError(t, err)
@@ -198,17 +220,17 @@ func TestRecord_TruncatesLargeBodies(t *testing.T) {
 
 func TestRecord_CapsBodiesByDefault(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{}, strings.Repeat("x", httpx.DefaultMaxBodyBytes+10))
+	app := recordApp(cap, fiberx.RecordConfig{}, strings.Repeat("x", fiberx.DefaultMaxBodyBytes+10))
 
 	_, err := app.Test(httptest.NewRequest("POST", "/api/x", nil))
 	require.NoError(t, err)
 
-	assert.Len(t, cap.value(t, 1, "body"), httpx.DefaultMaxBodyBytes)
+	assert.Len(t, cap.value(t, 1, "body"), fiberx.DefaultMaxBodyBytes)
 }
 
 func TestRecord_RedactsQueryParams(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{RedactQuery: []string{"token"}}, "ok")
+	app := recordApp(cap, fiberx.RecordConfig{RedactQuery: []string{"token"}}, "ok")
 
 	_, err := app.Test(httptest.NewRequest("GET", "/auth/token?token=secret&keep=1", nil))
 	require.NoError(t, err)
@@ -219,7 +241,7 @@ func TestRecord_RedactsQueryParams(t *testing.T) {
 
 func TestRecord_RedactHeadersExtendsDefaults(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, httpx.RecordConfig{RedactHeaders: []string{"x-internal-token"}}, "ok")
+	app := recordApp(cap, fiberx.RecordConfig{RedactHeaders: []string{"x-internal-token"}}, "ok")
 	req := httptest.NewRequest("GET", "/auth/token", nil)
 	req.Header.Set("X-Internal-Token", "secret")
 	req.Header.Set("Authorization", "secret")
