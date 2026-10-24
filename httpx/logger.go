@@ -42,7 +42,7 @@ func NewLoggerTransport(l ember.LoggerCtx, next http.RoundTripper, cfg LoggerTra
 	}
 	maxBody := cfg.MaxBodyBytes
 	if maxBody <= 0 {
-		maxBody = DefaultMaxBodyBytes
+		maxBody = defaultMaxBodyBytes
 	}
 
 	redact := make(map[string]struct{}, len(defaultRedactHeaders)+len(cfg.RedactHeaders))
