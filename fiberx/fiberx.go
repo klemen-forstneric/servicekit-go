@@ -4,6 +4,8 @@ package fiberx
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -84,17 +86,27 @@ const (
 
 const headerForwardedFor = "X-Forwarded-For"
 
-// Record logs each request and its response. Paths in skipPaths are not logged
-// (e.g. health checks). Credential headers are always redacted, matching
-// httpx.Record.
-func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
-	skip := make(map[string]struct{}, len(skipPaths))
-	for _, p := range skipPaths {
+// Record logs each request and its response, with the same config and the same
+// limits as httpx.Record: SkipPaths matches exactly, SkipBodyPaths by prefix,
+// credential headers are always redacted, and a body is logged up to
+// MaxBodyBytes.
+func Record(l ember.LoggerCtx, cfg httpx.RecordConfig) fiber.Handler {
+	if l == nil {
+		l = ember.NopLogger
+	}
+	maxBody := cfg.MaxBodyBytes
+	if maxBody <= 0 {
+		maxBody = httpx.DefaultMaxBodyBytes
+	}
+	skip := make(map[string]struct{}, len(cfg.SkipPaths))
+	for _, p := range cfg.SkipPaths {
 		skip[p] = struct{}{}
 	}
 	redactHeader := make(map[string]struct{})
-	for _, h := range httpx.DefaultRedactHeaders() {
-		redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
+	for _, hs := range [][]string{httpx.DefaultRedactHeaders(), cfg.RedactHeaders} {
+		for _, h := range hs {
+			redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
+		}
 	}
 
 	return func(c *fiber.Ctx) error {
@@ -103,15 +115,12 @@ func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
 		}
 
 		ctx := c.Context()
+		logBody := !hasPrefix(c.Path(), cfg.SkipBodyPaths)
+		path := redactedURL(c.OriginalURL(), cfg.RedactQuery)
 
-		requestBody := c.Body()
-		var reqBody interface{}
-		if len(requestBody) != 0 {
-			if json.Valid(requestBody) {
-				reqBody = json.RawMessage(requestBody)
-			} else {
-				reqBody = string(requestBody)
-			}
+		var reqBody any
+		if logBody {
+			reqBody = bodyForLog(c.Body(), maxBody)
 		}
 
 		headers := make(map[string]string)
@@ -137,7 +146,7 @@ func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
 		l.Info(ctx, "Incoming HTTP request",
 			logFieldRemoteAddress, remoteAddress,
 			logFieldHTTPMethod, c.Method(),
-			logFieldPath, c.OriginalURL(),
+			logFieldPath, path,
 			logFieldHeaders, headers,
 			logFieldBody, reqBody,
 		)
@@ -146,20 +155,59 @@ func Record(l ember.LoggerCtx, skipPaths ...string) fiber.Handler {
 			return err
 		}
 
-		responseBody := c.Response().Body()
-		var respBody json.RawMessage
-		if len(responseBody) != 0 {
-			respBody = json.RawMessage(responseBody)
+		var respBody any
+		if logBody {
+			respBody = bodyForLog(c.Response().Body(), maxBody)
 		}
 
 		l.Info(ctx, "Returned HTTP response",
 			logFieldStatusCode, c.Response().StatusCode(),
 			logFieldHTTPMethod, c.Method(),
-			logFieldPath, c.OriginalURL(),
+			logFieldPath, path,
 			logFieldBody, respBody,
 		)
 		return nil
 	}
+}
+
+// bodyForLog keeps at most limit bytes. A cut JSON body is no longer valid JSON,
+// so it is logged as a string, as httpx does.
+func bodyForLog(raw []byte, limit int) any {
+	raw = raw[:min(len(raw), limit)]
+	if len(raw) == 0 {
+		return nil
+	}
+	if json.Valid(raw) {
+		return json.RawMessage(raw)
+	}
+	return string(raw)
+}
+
+func redactedURL(uri string, redact []string) string {
+	if len(redact) == 0 {
+		return uri
+	}
+	u, err := url.ParseRequestURI(uri)
+	if err != nil || u.RawQuery == "" {
+		return uri
+	}
+	q := u.Query()
+	for _, key := range redact {
+		if q.Has(key) {
+			q.Set(key, httpx.RedactedValue)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.RequestURI()
+}
+
+func hasPrefix(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func JSON(c *fiber.Ctx, status int, data interface{}) error {

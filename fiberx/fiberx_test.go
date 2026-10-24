@@ -2,10 +2,12 @@ package fiberx_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/fiberx"
+	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
 
 func TestCorrelationID_GeneratesAndEchoes(t *testing.T) {
@@ -100,7 +103,7 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 	// logs request + response (2 Info calls) for a normal path
 	cap := &capLogger{}
 	app := fiber.New()
-	app.Use(fiberx.Record(cap, "/health"))
+	app.Use(fiberx.Record(cap, httpx.RecordConfig{SkipPaths: []string{"/health"}}))
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
 	app.Get("/health", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
@@ -120,7 +123,7 @@ func TestRecord_LogsAndSkips(t *testing.T) {
 func TestRecord_RedactsCredentialHeadersByDefault(t *testing.T) {
 	cap := &capLogger{}
 	app := fiber.New()
-	app.Use(fiberx.Record(cap))
+	app.Use(fiberx.Record(cap, httpx.RecordConfig{}))
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
 	req := httptest.NewRequest("GET", "/x", nil)
@@ -136,6 +139,83 @@ func TestRecord_RedactsCredentialHeadersByDefault(t *testing.T) {
 		assert.Equal(t, "[redacted]", headers[k], k)
 	}
 	assert.Equal(t, "example.com", headers["Host"]) // everything else is logged as before
+}
+
+// recordApp serves POST /api/x and GET /auth/token through Record, each
+// answering with body.
+func recordApp(cap *capLogger, cfg httpx.RecordConfig, body string) *fiber.App {
+	app := fiber.New()
+	app.Use(fiberx.Record(cap, cfg))
+	h := func(c *fiber.Ctx) error { return c.SendString(body) }
+	app.Post("/api/x", h)
+	app.Get("/auth/token", h)
+	return app
+}
+
+func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{SkipBodyPaths: []string{"/auth/"}}, `{"token":"t"}`)
+
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+	require.Equal(t, 2, cap.infos, "the request and response are still logged")
+	assert.Nil(t, cap.value(t, 0, "body"))
+	assert.Nil(t, cap.value(t, 1, "body"))
+
+	_, err = app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader(`{"a":1}`)))
+	require.NoError(t, err)
+	assert.Equal(t, json.RawMessage(`{"a":1}`), cap.value(t, 2, "body"))
+	assert.Equal(t, json.RawMessage(`{"token":"t"}`), cap.value(t, 3, "body"))
+}
+
+func TestRecord_TruncatesLargeBodies(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
+
+	resp, err := app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader("0123456789abcdef")))
+	require.NoError(t, err)
+	got, _ := io.ReadAll(resp.Body)
+
+	assert.Equal(t, `{"items":["a","b","c"]}`, string(got), "the client still gets the whole body")
+	assert.Equal(t, "01234567", cap.value(t, 0, "body"))
+	assert.Equal(t, `{"items"`, cap.value(t, 1, "body"), "cut JSON is logged as a string")
+}
+
+func TestRecord_CapsBodiesByDefault(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{}, strings.Repeat("x", httpx.DefaultMaxBodyBytes+10))
+
+	_, err := app.Test(httptest.NewRequest("POST", "/api/x", nil))
+	require.NoError(t, err)
+
+	assert.Len(t, cap.value(t, 1, "body"), httpx.DefaultMaxBodyBytes)
+}
+
+func TestRecord_RedactsQueryParams(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{RedactQuery: []string{"token"}}, "ok")
+
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token?token=secret&keep=1", nil))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/auth/token?keep=1&token=%5Bredacted%5D", cap.value(t, 0, "path"))
+	assert.Equal(t, "/auth/token?keep=1&token=%5Bredacted%5D", cap.value(t, 1, "path"))
+}
+
+func TestRecord_RedactHeadersExtendsDefaults(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, httpx.RecordConfig{RedactHeaders: []string{"x-internal-token"}}, "ok")
+	req := httptest.NewRequest("GET", "/auth/token", nil)
+	req.Header.Set("X-Internal-Token", "secret")
+	req.Header.Set("Authorization", "secret")
+
+	_, err := app.Test(req)
+	require.NoError(t, err)
+
+	headers, ok := cap.value(t, 0, "headers").(map[string]string)
+	require.True(t, ok)
+	assert.Equal(t, "[redacted]", headers["X-Internal-Token"])
+	assert.Equal(t, "[redacted]", headers["Authorization"])
 }
 
 // ipApp echoes c.IP() so the trusted-proxy behaviour is observable. app.Test
