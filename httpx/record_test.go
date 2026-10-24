@@ -177,6 +177,40 @@ func TestRecordLogsBodyOnOtherPaths(t *testing.T) {
 	assert.NotNil(t, l.value(t, 0, "body"))
 }
 
+func TestRecordConfigLogsBody(t *testing.T) {
+	cfg := httpx.RecordConfig{
+		SkipBodyPaths:  []string{"/auth/"},
+		SkipBodyRoutes: []httpx.Route{{Path: "/creators"}, {Method: http.MethodPost, Path: "/uploads"}},
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		logs         bool
+	}{
+		{"GET", "/creators", false},
+		{"get", "/creators", false},
+		{"POST", "/creators", true},
+		{"GET", "/creators/c1", true},
+		{"POST", "/uploads", false},
+		{"GET", "/uploads", true},
+		{"POST", "/auth/login", false},
+		{"GET", "/chats", true},
+	} {
+		assert.Equal(t, tc.logs, cfg.LogsBody(tc.method, tc.path), "%s %s", tc.method, tc.path)
+	}
+}
+
+// SkipBodyRoutes still logs the request and response lines, without bodies.
+func TestRecordSkipsBodiesForARoute(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{SkipBodyRoutes: []httpx.Route{{Path: "/creators"}}})(okHandler())
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/creators?first=200", nil))
+
+	require.Len(t, l.lines, 2)
+	assert.Nil(t, l.value(t, 1, "body"))
+}
+
 // The handler must still see the body Record consumed for logging.
 func TestRecordRestoresRequestBody(t *testing.T) {
 	l := &recLogger{}

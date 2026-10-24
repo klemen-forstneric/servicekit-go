@@ -45,14 +45,44 @@ var defaultRedactHeaders = []string{
 func DefaultRedactHeaders() []string { return slices.Clone(defaultRedactHeaders) }
 
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
-// matches by prefix. RedactHeaders extends the credential headers Record always
-// redacts; it cannot un-redact them.
+// matches by prefix; SkipBodyRoutes matches a method and an exact path.
+// RedactHeaders extends the credential headers Record always redacts; it cannot
+// un-redact them.
 type RecordConfig struct {
-	SkipPaths     []string
-	SkipBodyPaths []string
-	RedactQuery   []string
-	RedactHeaders []string
-	MaxBodyBytes  int
+	SkipPaths      []string
+	SkipBodyPaths  []string
+	SkipBodyRoutes []Route
+	RedactQuery    []string
+	RedactHeaders  []string
+	MaxBodyBytes   int
+}
+
+// Route is one endpoint: a method and an exact path. An empty Method is GET.
+type Route struct {
+	Method string
+	Path   string
+}
+
+func (r Route) matches(method, path string) bool {
+	m := r.Method
+	if m == "" {
+		m = http.MethodGet
+	}
+	return path == r.Path && strings.EqualFold(method, m)
+}
+
+// LogsBody reports whether Record logs the bodies of a request to method and
+// path. fiberx.Record asks the same question.
+func (c RecordConfig) LogsBody(method, path string) bool {
+	if hasPrefix(path, c.SkipBodyPaths) {
+		return false
+	}
+	for _, r := range c.SkipBodyRoutes {
+		if r.matches(method, path) {
+			return false
+		}
+	}
+	return true
 }
 
 // Record logs each request and its response.
@@ -83,7 +113,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 				return
 			}
 
-			logBody := !hasPrefix(r.URL.Path, cfg.SkipBodyPaths)
+			logBody := cfg.LogsBody(r.Method, r.URL.Path)
 
 			var reqBody any
 			if logBody {
