@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,6 +153,21 @@ func TestRecordRedactsQueryParams(t *testing.T) {
 	assert.Contains(t, path, "token=%5Bredacted%5D")
 	assert.Contains(t, path, "x=1")
 	assert.NotContains(t, path, "super-secret")
+}
+
+func TestRecordLogsTheDuration(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		httpx.JSON(w, http.StatusOK, "hi")
+	}))
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+
+	d, ok := l.value(t, 1, "duration").(time.Duration)
+	require.True(t, ok, "duration is a time.Duration, so the logger formats it")
+	assert.GreaterOrEqual(t, d, 5*time.Millisecond)
+	assert.Nil(t, l.value(t, 0, "duration"), "only the response line has a duration")
 }
 
 // SkipBodyPaths is a prefix match: the request is still logged, the body is not.

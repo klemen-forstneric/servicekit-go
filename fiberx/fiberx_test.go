@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/klemen-forstneric/ember/correlation"
@@ -203,6 +204,39 @@ func TestRecord_SkipsBodiesForARoute(t *testing.T) {
 	assert.Nil(t, cap.value(t, 0, "body"))
 	assert.Nil(t, cap.value(t, 1, "body"))
 	assert.Equal(t, json.RawMessage(`{"a":1}`), cap.value(t, 3, "body"), "other routes keep their bodies")
+}
+
+func TestRecord_LogsTheDuration(t *testing.T) {
+	cap := &capLogger{}
+	app := fiber.New()
+	app.Use(fiberx.Record(cap, fiberx.RecordConfig{}))
+	app.Get("/x", func(c *fiber.Ctx) error {
+		time.Sleep(5 * time.Millisecond)
+		return c.SendString("ok")
+	})
+
+	_, err := app.Test(httptest.NewRequest("GET", "/x", nil))
+	require.NoError(t, err)
+
+	d, ok := cap.value(t, 1, "duration").(time.Duration)
+	require.True(t, ok, "duration is a time.Duration, so the logger formats it")
+	assert.GreaterOrEqual(t, d, 5*time.Millisecond)
+	assert.Nil(t, cap.value(t, 0, "duration"), "only the response line has a duration")
+}
+
+func TestRecord_LogsTheResponseOfAHandlerError(t *testing.T) {
+	cap := &capLogger{}
+	app := fiber.New()
+	app.Use(fiberx.Record(cap, fiberx.RecordConfig{}))
+	app.Get("/x", func(c *fiber.Ctx) error { return fiber.ErrTeapot })
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/x", nil))
+	require.NoError(t, err)
+
+	assert.Equal(t, fiber.StatusTeapot, resp.StatusCode, "the client gets the error handler's response")
+	require.Equal(t, 2, cap.infos, "the response line is logged too")
+	assert.Equal(t, fiber.StatusTeapot, cap.value(t, 1, "status_code"))
+	assert.IsType(t, time.Duration(0), cap.value(t, 1, "duration"))
 }
 
 func TestRecord_TruncatesLargeBodies(t *testing.T) {
