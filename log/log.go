@@ -21,7 +21,17 @@ type Logger struct {
 func New() *Logger { return newWithWriter(os.Stdout) }
 
 func newWithWriter(w io.Writer) *Logger {
-	return &Logger{l: slog.New(slog.NewJSONHandler(w, nil))}
+	return &Logger{l: slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{ReplaceAttr: durationAsText}))}
+}
+
+// durationAsText logs a time.Duration as "75.3ms" rather than slog's JSON
+// default of integer nanoseconds. Loki still aggregates it with
+// unwrap duration(<field>).
+func durationAsText(_ []string, a slog.Attr) slog.Attr {
+	if a.Value.Kind() == slog.KindDuration {
+		a.Value = slog.StringValue(a.Value.Duration().String())
+	}
+	return a
 }
 
 func (g *Logger) log(ctx context.Context, level slog.Level, msg string, kvs ...any) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -82,6 +83,7 @@ const (
 	logFieldHeaders       = "headers"
 	logFieldBody          = "body"
 	logFieldStatusCode    = "status_code"
+	logFieldDuration      = "duration"
 )
 
 const headerForwardedFor = "X-Forwarded-For"
@@ -194,9 +196,15 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 			logFieldBody, reqBody,
 		)
 
+		start := time.Now()
 		if err := c.Next(); err != nil {
-			return err
+			// Write the error response here, as Fiber's logger does, so the line
+			// below logs the status the client gets.
+			if herr := c.App().ErrorHandler(c, err); herr != nil {
+				_ = c.SendStatus(fiber.StatusInternalServerError)
+			}
 		}
+		duration := time.Since(start)
 
 		var respBody any
 		if logBody {
@@ -207,6 +215,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 			logFieldStatusCode, c.Response().StatusCode(),
 			logFieldHTTPMethod, c.Method(),
 			logFieldPath, path,
+			logFieldDuration, duration,
 			logFieldBody, respBody,
 		)
 		return nil

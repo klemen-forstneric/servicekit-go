@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/klemen-forstneric/ember"
 )
@@ -20,6 +21,7 @@ const (
 	logFieldHeaders       = "headers"
 	logFieldBody          = "body"
 	logFieldStatusCode    = "status_code"
+	logFieldDuration      = "duration"
 )
 
 const (
@@ -128,7 +130,9 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 			)
 
 			rec := &recorder{ResponseWriter: w, status: http.StatusOK, capture: logBody, limit: maxBody}
+			start := time.Now()
 			next.ServeHTTP(rec, r)
+			duration := time.Since(start)
 
 			status := rec.status
 			if rec.hijacked {
@@ -144,6 +148,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 				logFieldStatusCode, status,
 				logFieldHTTPMethod, r.Method,
 				logFieldPath, redactedURL(r, cfg.RedactQuery),
+				logFieldDuration, duration,
 				logFieldBody, respBody,
 			)
 		})
