@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/klemen-forstneric/servicekit-go/caller"
 	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/fiberx"
 )
@@ -73,6 +74,66 @@ func TestIdempotencyKey_PresentAndAbsent(t *testing.T) {
 	_, err = app2.Test(httptest.NewRequest("GET", "/", nil))
 	require.NoError(t, err)
 	assert.False(t, *ok2)
+}
+
+func TestCaller_StoresTheHeadersOnTheUserContext(t *testing.T) {
+	var got caller.Caller
+	var gotErr error
+	app := fiber.New()
+	app.Use(fiberx.Caller())
+	app.Get("/x", func(c *fiber.Ctx) error {
+		got, gotErr = caller.FromContext(c.UserContext())
+		return nil
+	})
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set(fiberx.CallerHeader, "ops@stxt.ai")
+	req.Header.Set(fiberx.CallerClientHeader, "bo-cli")
+	_, err := app.Test(req)
+
+	require.NoError(t, err)
+	require.NoError(t, gotErr)
+	assert.Equal(t, caller.Caller{ID: "ops@stxt.ai", Client: "bo-cli"}, got)
+}
+
+func TestCaller_NoHeaderNoCaller(t *testing.T) {
+	var gotErr error
+	app := fiber.New()
+	app.Use(fiberx.Caller())
+	app.Get("/x", func(c *fiber.Ctx) error {
+		_, gotErr = caller.FromContext(c.UserContext())
+		return nil
+	})
+
+	_, err := app.Test(httptest.NewRequest("GET", "/x", nil))
+
+	require.NoError(t, err)
+	assert.ErrorIs(t, gotErr, caller.ErrNotFound)
+}
+
+// callerLogger records the caller each log line's context carries.
+type callerLogger struct{ capLogger }
+
+func (c *callerLogger) Info(ctx context.Context, msg string, kvs ...any) {
+	who, _ := caller.FromContext(ctx)
+	c.capLogger.Info(ctx, msg, append(kvs, "ctx_caller", who.ID)...)
+}
+
+// Record logs with c.Context(), not the user context, so the caller must reach
+// it through Locals — wherever Caller sits in the chain.
+func TestCaller_ReachesTheRecordedRequestLine(t *testing.T) {
+	cap := &callerLogger{}
+	app := fiber.New()
+	app.Use(fiberx.Record(cap, fiberx.RecordConfig{}), fiberx.Caller())
+	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set(fiberx.CallerHeader, "ops@stxt.ai")
+	_, err := app.Test(req)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, cap.infos)
+	assert.Equal(t, "ops@stxt.ai", cap.value(t, 1, "ctx_caller"), "the response line carries the caller")
 }
 
 type capLogger struct {

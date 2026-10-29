@@ -1,5 +1,5 @@
 // Package log provides a slog-backed ember.LoggerCtx that stamps the
-// correlation id from the context onto every line.
+// correlation id and caller from the context onto every line.
 package log
 
 import (
@@ -10,6 +10,8 @@ import (
 
 	"github.com/klemen-forstneric/ember"
 	"github.com/klemen-forstneric/ember/correlation"
+
+	"github.com/klemen-forstneric/servicekit-go/caller"
 )
 
 // Logger adapts slog to ember.LoggerCtx.
@@ -35,6 +37,9 @@ func durationAsText(_ []string, a slog.Attr) slog.Attr {
 }
 
 func (g *Logger) log(ctx context.Context, level slog.Level, msg string, kvs ...any) {
+	if c, err := caller.FromContext(ctx); err == nil {
+		kvs = append([]any{"caller", c.ID, "caller_client", c.Client}, kvs...)
+	}
 	if cid, err := correlation.FromContext(ctx); err == nil {
 		kvs = append([]any{"correlation_id", cid}, kvs...)
 	}
