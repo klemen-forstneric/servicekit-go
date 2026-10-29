@@ -15,6 +15,7 @@ import (
 	"github.com/klemen-forstneric/ember/correlation"
 	"github.com/klemen-forstneric/spark"
 
+	"github.com/klemen-forstneric/servicekit-go/caller"
 	"github.com/klemen-forstneric/servicekit-go/errorsx"
 	"github.com/klemen-forstneric/servicekit-go/httpx"
 )
@@ -22,6 +23,8 @@ import (
 const (
 	CorrelationIDHeader  = httpx.CorrelationIDHeader
 	IdempotencyKeyHeader = httpx.IdempotencyKeyHeader
+	CallerHeader         = httpx.CallerHeader
+	CallerClientHeader   = httpx.CallerClientHeader
 )
 
 // TrustedProxyConfig returns the Fiber config a service needs for c.IP() to
@@ -60,6 +63,21 @@ func CorrelationID() fiber.Handler {
 		c.Locals(correlation.ContextKey, correlationID)
 		c.SetUserContext(correlation.NewContext(c.UserContext(), correlationID))
 
+		return c.Next()
+	}
+}
+
+// Caller stores who made the request — the X-Caller and X-Client headers the
+// backoffice gateway sets — where caller.FromContext can read it, on Locals and
+// the user context like CorrelationID. No X-Caller header → no caller. Only an
+// internal service may use it: whoever reaches it can claim any caller.
+func Caller() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if id := c.Get(CallerHeader); id != "" {
+			who := caller.Caller{ID: id, Client: c.Get(CallerClientHeader)}
+			c.Locals(caller.ContextKey, who)
+			c.SetUserContext(caller.NewContext(c.UserContext(), who))
+		}
 		return c.Next()
 	}
 }

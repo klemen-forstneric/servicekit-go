@@ -11,6 +11,10 @@ import (
 const (
 	CorrelationIDHeader  = "Correlation-ID"
 	IdempotencyKeyHeader = "Idempotency-Key"
+	// CallerHeader and CallerClientHeader name who made a request; the
+	// backoffice gateway sets them from the staff token.
+	CallerHeader       = "X-Caller"
+	CallerClientHeader = "X-Client"
 )
 
 var (
