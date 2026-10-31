@@ -2,7 +2,9 @@
 package fiberx
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -121,6 +123,10 @@ type RecordConfig struct {
 	RedactQuery    []string
 	RedactHeaders  []string
 	MaxBodyBytes   int
+	// RedactBodyKeys names JSON object keys (exact match, any depth) whose
+	// values are redacted. A body that cannot be redacted whole is logged as
+	// its size only.
+	RedactBodyKeys []string
 }
 
 // Route is one endpoint: a method and an exact path. An empty Method is GET.
@@ -172,6 +178,11 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 		}
 	}
 
+	redactBody := make(map[string]struct{}, len(cfg.RedactBodyKeys))
+	for _, k := range cfg.RedactBodyKeys {
+		redactBody[k] = struct{}{}
+	}
+
 	return func(c *fiber.Ctx) error {
 		if _, ok := skip[c.Path()]; ok {
 			return c.Next()
@@ -183,7 +194,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 
 		var reqBody any
 		if logBody {
-			reqBody = bodyForLog(c.Body(), maxBody)
+			reqBody = bodyForLog(c.Body(), maxBody, redactBody)
 		}
 
 		headers := make(map[string]string)
@@ -226,7 +237,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 
 		var respBody any
 		if logBody {
-			respBody = bodyForLog(c.Response().Body(), maxBody)
+			respBody = bodyForLog(c.Response().Body(), maxBody, redactBody)
 		}
 
 		l.Info(ctx, "Returned HTTP response",
@@ -242,7 +253,10 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 
 // bodyForLog keeps at most limit bytes. A cut JSON body is no longer valid JSON,
 // so it is logged as a string.
-func bodyForLog(raw []byte, limit int) any {
+func bodyForLog(raw []byte, limit int, redact map[string]struct{}) any {
+	if len(redact) > 0 {
+		return redactedBody(raw, limit, redact)
+	}
 	raw = raw[:min(len(raw), limit)]
 	if len(raw) == 0 {
 		return nil
@@ -251,6 +265,44 @@ func bodyForLog(raw []byte, limit int) any {
 		return json.RawMessage(raw)
 	}
 	return string(raw)
+}
+
+func redactedBody(raw []byte, limit int, redact map[string]struct{}) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	if len(raw) > limit {
+		return fmt.Sprintf("[body omitted, %d bytes]", len(raw))
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil || dec.More() {
+		return fmt.Sprintf("[non-JSON body, %d bytes]", len(raw))
+	}
+	out, err := json.Marshal(redactKeys(v, redact))
+	if err != nil {
+		return fmt.Sprintf("[body omitted, %d bytes]", len(raw))
+	}
+	return json.RawMessage(out)
+}
+
+func redactKeys(v any, redact map[string]struct{}) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if _, ok := redact[k]; ok {
+				t[k] = httpx.RedactedValue
+				continue
+			}
+			t[k] = redactKeys(val, redact)
+		}
+	case []any:
+		for i, val := range t {
+			t[i] = redactKeys(val, redact)
+		}
+	}
+	return v
 }
 
 func redactedURL(uri string, redact []string) string {

@@ -461,3 +461,48 @@ func TestError_IncludesCodeOnlyWhenCoded(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	assert.JSONEq(t, `{"data":null,"error":"plain"}`, string(body))
 }
+
+func TestRecord_RedactsBodyKeysAtAnyDepth(t *testing.T) {
+	cap := &capLogger{}
+	body := `{"asset":{"id":"a1"},"upload":{"url":"https://s3/x?X-Amz-Signature=s","method":"PUT"},"items":[{"image_url":"https://s3/y?X-Amz-Signature=s"}]}`
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url", "image_url"}}, body)
+
+	_, err := app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader(`{"url":"in-request"}`)))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"url":"[redacted]"}`, string(cap.value(t, 0, "body").(json.RawMessage)))
+	assert.JSONEq(t, `{"asset":{"id":"a1"},"upload":{"url":"[redacted]","method":"PUT"},"items":[{"image_url":"[redacted]"}]}`,
+		string(cap.value(t, 1, "body").(json.RawMessage)))
+}
+
+func TestRecord_RedactBodyKeysMatchesExactlyAndKeepsNumbers(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url"}}, `{"urls":"a","URL":"b","big":12345678901234567890,"f":1.50}`)
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"urls":"a","URL":"b","big":12345678901234567890,"f":1.50}`, string(cap.value(t, 1, "body").(json.RawMessage)))
+	assert.Contains(t, string(cap.value(t, 1, "body").(json.RawMessage)), `"f":1.50`)
+}
+
+func TestRecord_RedactBodyKeysLogsNothingForAnEmptyBody(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url"}}, "")
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+	assert.Nil(t, cap.value(t, 1, "body"))
+}
+
+func TestRecord_RedactBodyKeysOmitsATruncatedBody(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url"}, MaxBodyBytes: 16}, `{"url":"https://s3/x?X-Amz-Signature=s"}`)
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "[body omitted, 40 bytes]", cap.value(t, 1, "body"))
+}
+
+func TestRecord_RedactBodyKeysOmitsANonJSONBody(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url"}}, `url=https://s3/x?X-Amz-Signature=s`)
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "[non-JSON body, 34 bytes]", cap.value(t, 1, "body"))
+}
