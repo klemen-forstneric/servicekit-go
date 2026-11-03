@@ -114,8 +114,8 @@ const DefaultMaxBodyBytes = 64 << 10
 
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
 // matches by prefix; SkipBodyRoutes matches a method and an exact path.
-// RedactHeaders extends the credential headers Record always redacts; it cannot
-// un-redact them.
+// RedactHeaders, RedactQuery and RedactBodyKeys extend the credentials Record
+// always redacts; they cannot un-redact them.
 type RecordConfig struct {
 	SkipPaths      []string
 	SkipBodyPaths  []string
@@ -123,9 +123,9 @@ type RecordConfig struct {
 	RedactQuery    []string
 	RedactHeaders  []string
 	MaxBodyBytes   int
-	// RedactBodyKeys names JSON object keys (exact match, any depth) whose
-	// values are redacted. A body that cannot be redacted whole is logged as
-	// its size only.
+	// RedactBodyKeys names JSON object keys (any depth, see httpx.RedactKeys)
+	// whose values are redacted. A body that cannot be redacted whole is logged
+	// as its size only.
 	RedactBodyKeys []string
 }
 
@@ -178,10 +178,8 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 		}
 	}
 
-	redactBody := make(map[string]struct{}, len(cfg.RedactBodyKeys))
-	for _, k := range cfg.RedactBodyKeys {
-		redactBody[k] = struct{}{}
-	}
+	redactBody := httpx.NewRedactKeys(cfg.RedactBodyKeys...)
+	redactQuery := httpx.NewRedactKeys(cfg.RedactQuery...)
 
 	return func(c *fiber.Ctx) error {
 		if _, ok := skip[c.Path()]; ok {
@@ -190,11 +188,11 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 
 		ctx := c.Context()
 		logBody := cfg.LogsBody(c.Method(), c.Path())
-		path := redactedURL(c.OriginalURL(), cfg.RedactQuery)
+		path := redactedURL(c.OriginalURL(), redactQuery)
 
 		var reqBody any
 		if logBody {
-			reqBody = bodyForLog(c.Body(), maxBody, redactBody)
+			reqBody = redactedBody(c.Body(), maxBody, redactBody)
 		}
 
 		headers := make(map[string]string)
@@ -237,7 +235,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 
 		var respBody any
 		if logBody {
-			respBody = bodyForLog(c.Response().Body(), maxBody, redactBody)
+			respBody = redactedBody(c.Response().Body(), maxBody, redactBody)
 		}
 
 		l.Info(ctx, "Returned HTTP response",
@@ -251,23 +249,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 	}
 }
 
-// bodyForLog keeps at most limit bytes. A cut JSON body is no longer valid JSON,
-// so it is logged as a string.
-func bodyForLog(raw []byte, limit int, redact map[string]struct{}) any {
-	if len(redact) > 0 {
-		return redactedBody(raw, limit, redact)
-	}
-	raw = raw[:min(len(raw), limit)]
-	if len(raw) == 0 {
-		return nil
-	}
-	if json.Valid(raw) {
-		return json.RawMessage(raw)
-	}
-	return string(raw)
-}
-
-func redactedBody(raw []byte, limit int, redact map[string]struct{}) any {
+func redactedBody(raw []byte, limit int, redact httpx.RedactKeys) any {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -287,11 +269,11 @@ func redactedBody(raw []byte, limit int, redact map[string]struct{}) any {
 	return json.RawMessage(out)
 }
 
-func redactKeys(v any, redact map[string]struct{}) any {
+func redactKeys(v any, redact httpx.RedactKeys) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if _, ok := redact[k]; ok {
+			if redact.IsRedacted(k) {
 				t[k] = httpx.RedactedValue
 				continue
 			}
@@ -305,21 +287,12 @@ func redactKeys(v any, redact map[string]struct{}) any {
 	return v
 }
 
-func redactedURL(uri string, redact []string) string {
-	if len(redact) == 0 {
-		return uri
-	}
+func redactedURL(uri string, keys httpx.RedactKeys) string {
 	u, err := url.ParseRequestURI(uri)
 	if err != nil || u.RawQuery == "" {
 		return uri
 	}
-	q := u.Query()
-	for _, key := range redact {
-		if q.Has(key) {
-			q.Set(key, httpx.RedactedValue)
-		}
-	}
-	u.RawQuery = q.Encode()
+	u.RawQuery = keys.RedactQuery(u.RawQuery)
 	return u.RequestURI()
 }
 

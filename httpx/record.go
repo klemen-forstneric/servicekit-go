@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -44,10 +45,62 @@ var defaultRedactHeaders = []string{
 // is exported so fiberx.Record redacts exactly the same set.
 func DefaultRedactHeaders() []string { return slices.Clone(defaultRedactHeaders) }
 
+// defaultRedactKeys is always redacted from bodies and queries, in normalized form.
+var defaultRedactKeys = []string{
+	"password", "oldpassword", "newpassword",
+	"token", "accesstoken", "refreshtoken", "idtoken",
+	"code", "secret", "clientsecret", "apikey",
+}
+
+// RedactKeys holds the body and query keys to redact. Keys match ignoring case,
+// '_' and '-', so access_token, accessToken and Access-Token are one key.
+type RedactKeys map[string]struct{}
+
+// NewRedactKeys returns the credential keys Record always redacts plus extra.
+func NewRedactKeys(extra ...string) RedactKeys {
+	keys := make(RedactKeys, len(defaultRedactKeys)+len(extra))
+	for _, ks := range [][]string{defaultRedactKeys, extra} {
+		for _, k := range ks {
+			keys[normalizeKey(k)] = struct{}{}
+		}
+	}
+	return keys
+}
+
+// IsRedacted reports whether the value under key must not be logged.
+func (k RedactKeys) IsRedacted(key string) bool {
+	_, ok := k[normalizeKey(key)]
+	return ok
+}
+
+// RedactQuery returns rawQuery with every redacted key's values replaced. A
+// well-formed query with nothing to redact is returned unchanged; a malformed
+// one loses the pairs that do not parse.
+func (k RedactKeys) RedactQuery(rawQuery string) string {
+	q, err := url.ParseQuery(rawQuery)
+	redacted := err != nil
+	for key := range q {
+		if k.IsRedacted(key) {
+			q.Set(key, RedactedValue)
+			redacted = true
+		}
+	}
+	if !redacted {
+		return rawQuery
+	}
+	return q.Encode()
+}
+
+var keySeparators = strings.NewReplacer("_", "", "-", "")
+
+func normalizeKey(key string) string {
+	return keySeparators.Replace(strings.ToLower(key))
+}
+
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
 // matches by prefix; SkipBodyRoutes matches a method and an exact path.
-// RedactHeaders extends the credential headers Record always redacts; it cannot
-// un-redact them.
+// RedactHeaders and RedactQuery extend the credentials Record always redacts;
+// they cannot un-redact them.
 type RecordConfig struct {
 	SkipPaths      []string
 	SkipBodyPaths  []string
@@ -105,6 +158,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 			redactHeader[http.CanonicalHeaderKey(h)] = struct{}{}
 		}
 	}
+	redactQuery := NewRedactKeys(cfg.RedactQuery...)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +178,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 			l.Info(r.Context(), "Incoming HTTP request",
 				logFieldRemoteAddress, r.RemoteAddr,
 				logFieldHTTPMethod, r.Method,
-				logFieldPath, redactedURL(r, cfg.RedactQuery),
+				logFieldPath, redactedURL(r, redactQuery),
 				logFieldHeaders, headers(r, redactHeader),
 				logFieldBody, reqBody,
 			)
@@ -147,7 +201,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 			l.Info(r.Context(), "Returned HTTP response",
 				logFieldStatusCode, status,
 				logFieldHTTPMethod, r.Method,
-				logFieldPath, redactedURL(r, cfg.RedactQuery),
+				logFieldPath, redactedURL(r, redactQuery),
 				logFieldDuration, duration,
 				logFieldBody, respBody,
 			)
@@ -246,18 +300,12 @@ func headers(r *http.Request, redact map[string]struct{}) map[string]string {
 	return out
 }
 
-func redactedURL(r *http.Request, redact []string) string {
-	if len(redact) == 0 || r.URL.RawQuery == "" {
+func redactedURL(r *http.Request, keys RedactKeys) string {
+	if r.URL.RawQuery == "" {
 		return r.URL.RequestURI()
 	}
 	u := *r.URL
-	q := u.Query()
-	for _, key := range redact {
-		if q.Has(key) {
-			q.Set(key, RedactedValue)
-		}
-	}
-	u.RawQuery = q.Encode()
+	u.RawQuery = keys.RedactQuery(u.RawQuery)
 	return u.RequestURI()
 }
 

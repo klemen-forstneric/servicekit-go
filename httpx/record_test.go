@@ -155,6 +155,38 @@ func TestRecordRedactsQueryParams(t *testing.T) {
 	assert.NotContains(t, path, "super-secret")
 }
 
+func TestRecordRedactsCredentialQueryParamsByDefault(t *testing.T) {
+	l := &recLogger{}
+	h := httpx.Record(l, httpx.RecordConfig{})(okHandler())
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/ws?access_token=super-secret&x=1", nil))
+
+	path, _ := l.value(t, 0, "path").(string)
+	assert.Equal(t, "/ws?access_token=%5Bredacted%5D&x=1", path)
+}
+
+func TestRedactKeysRedactQuery(t *testing.T) {
+	keys := httpx.NewRedactKeys()
+	assert.Equal(t, "b=2&a=1", keys.RedactQuery("b=2&a=1"), "nothing to redact: not re-encoded")
+	assert.Equal(t, "a=1&token=%5Bredacted%5D", keys.RedactQuery("token=t&a=1"))
+	assert.Equal(t, "a=1", keys.RedactQuery("token=%zz&a=1"), "a pair that does not parse is dropped, not logged raw")
+}
+
+func TestRedactKeys(t *testing.T) {
+	keys := httpx.NewRedactKeys("session_id")
+	for key, want := range map[string]bool{
+		"password":     true,
+		"PASSWORD":     true,
+		"access_token": true,
+		"accessToken":  true,
+		"Access-Token": true,
+		"sessionId":    true,
+		"tokens":       false,
+		"name":         false,
+	} {
+		assert.Equal(t, want, keys.IsRedacted(key), key)
+	}
+}
+
 func TestRecordLogsTheDuration(t *testing.T) {
 	l := &recLogger{}
 	h := httpx.Record(l, httpx.RecordConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

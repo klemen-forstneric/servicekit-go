@@ -215,7 +215,7 @@ func recordApp(cap *capLogger, cfg fiberx.RecordConfig, body string) *fiber.App 
 
 func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, fiberx.RecordConfig{SkipBodyPaths: []string{"/auth/"}}, `{"token":"t"}`)
+	app := recordApp(cap, fiberx.RecordConfig{SkipBodyPaths: []string{"/auth/"}}, `{"id":"t"}`)
 
 	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
 	require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestRecord_SkipsBodiesByPrefix(t *testing.T) {
 	_, err = app.Test(httptest.NewRequest("POST", "/api/x", strings.NewReader(`{"a":1}`)))
 	require.NoError(t, err)
 	assert.Equal(t, json.RawMessage(`{"a":1}`), cap.value(t, 2, "body"))
-	assert.Equal(t, json.RawMessage(`{"token":"t"}`), cap.value(t, 3, "body"))
+	assert.Equal(t, json.RawMessage(`{"id":"t"}`), cap.value(t, 3, "body"))
 }
 
 func TestRecordConfig_LogsBody(t *testing.T) {
@@ -300,7 +300,7 @@ func TestRecord_LogsTheResponseOfAHandlerError(t *testing.T) {
 	assert.IsType(t, time.Duration(0), cap.value(t, 1, "duration"))
 }
 
-func TestRecord_TruncatesLargeBodies(t *testing.T) {
+func TestRecord_OmitsLargeBodies(t *testing.T) {
 	cap := &capLogger{}
 	app := recordApp(cap, fiberx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
 
@@ -309,8 +309,8 @@ func TestRecord_TruncatesLargeBodies(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 
 	assert.Equal(t, `{"items":["a","b","c"]}`, string(got), "the client still gets the whole body")
-	assert.Equal(t, "01234567", cap.value(t, 0, "body"))
-	assert.Equal(t, `{"items"`, cap.value(t, 1, "body"), "cut JSON is logged as a string")
+	assert.Equal(t, "[body omitted, 16 bytes]", cap.value(t, 0, "body"))
+	assert.Equal(t, "[body omitted, 23 bytes]", cap.value(t, 1, "body"), "a cut body cannot be redacted")
 }
 
 func TestRecord_CapsBodiesByDefault(t *testing.T) {
@@ -320,7 +320,7 @@ func TestRecord_CapsBodiesByDefault(t *testing.T) {
 	_, err := app.Test(httptest.NewRequest("POST", "/api/x", nil))
 	require.NoError(t, err)
 
-	assert.Len(t, cap.value(t, 1, "body"), fiberx.DefaultMaxBodyBytes)
+	assert.Equal(t, fmt.Sprintf("[body omitted, %d bytes]", fiberx.DefaultMaxBodyBytes+10), cap.value(t, 1, "body"))
 }
 
 func TestRecord_RedactsQueryParams(t *testing.T) {
@@ -332,6 +332,38 @@ func TestRecord_RedactsQueryParams(t *testing.T) {
 
 	assert.Equal(t, "/auth/token?keep=1&token=%5Bredacted%5D", cap.value(t, 0, "path"))
 	assert.Equal(t, "/auth/token?keep=1&token=%5Bredacted%5D", cap.value(t, 1, "path"))
+}
+
+func TestRecord_RedactsCredentialsByDefault(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{}, `{"user":{"refresh_token":"r","name":"n"}}`)
+
+	_, err := app.Test(httptest.NewRequest("POST", "/api/x?api_key=k&keep=1", strings.NewReader(`{"password":"p","accessToken":"a"}`)))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/api/x?api_key=%5Bredacted%5D&keep=1", cap.value(t, 0, "path"))
+	assert.JSONEq(t, `{"password":"[redacted]","accessToken":"[redacted]"}`, string(cap.value(t, 0, "body").(json.RawMessage)))
+	assert.JSONEq(t, `{"user":{"refresh_token":"[redacted]","name":"n"}}`, string(cap.value(t, 1, "body").(json.RawMessage)))
+}
+
+func TestRecord_RedactQueryExtendsDefaults(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{RedactQuery: []string{"session_id"}}, "ok")
+
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token?sessionId=s&Token=t", nil))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/auth/token?Token=%5Bredacted%5D&sessionId=%5Bredacted%5D", cap.value(t, 0, "path"))
+}
+
+func TestRecord_KeepsAQueryWithNothingToRedact(t *testing.T) {
+	cap := &capLogger{}
+	app := recordApp(cap, fiberx.RecordConfig{}, "ok")
+
+	_, err := app.Test(httptest.NewRequest("GET", "/auth/token?b=2&a=1", nil))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/auth/token?b=2&a=1", cap.value(t, 0, "path"), "not re-encoded")
 }
 
 func TestRecord_RedactHeadersExtendsDefaults(t *testing.T) {
@@ -474,12 +506,12 @@ func TestRecord_RedactsBodyKeysAtAnyDepth(t *testing.T) {
 		string(cap.value(t, 1, "body").(json.RawMessage)))
 }
 
-func TestRecord_RedactBodyKeysMatchesExactlyAndKeepsNumbers(t *testing.T) {
+func TestRecord_RedactBodyKeysIgnoreCaseAndSeparatorsAndKeepNumbers(t *testing.T) {
 	cap := &capLogger{}
-	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"url"}}, `{"urls":"a","URL":"b","big":12345678901234567890,"f":1.50}`)
+	app := recordApp(cap, fiberx.RecordConfig{RedactBodyKeys: []string{"image_url"}}, `{"image_urls":"a","ImageURL":"b","image-url":"c","big":12345678901234567890,"f":1.50}`)
 	_, err := app.Test(httptest.NewRequest("GET", "/auth/token", nil))
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"urls":"a","URL":"b","big":12345678901234567890,"f":1.50}`, string(cap.value(t, 1, "body").(json.RawMessage)))
+	assert.JSONEq(t, `{"image_urls":"a","ImageURL":"[redacted]","image-url":"[redacted]","big":12345678901234567890,"f":1.50}`, string(cap.value(t, 1, "body").(json.RawMessage)))
 	assert.Contains(t, string(cap.value(t, 1, "body").(json.RawMessage)), `"f":1.50`)
 }
 
