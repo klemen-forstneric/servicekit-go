@@ -80,6 +80,17 @@ func TestRecordSkipPathsIsExact(t *testing.T) {
 	assert.Len(t, l.lines, 2)
 }
 
+// The mux routes these spellings to /health, so Record skips them too.
+func TestRecordSkipPathsMatchesTheCleanedPath(t *testing.T) {
+	for _, p := range []string{"//health", "/health/", "/x/../health", "/./health"} {
+		l := &recLogger{}
+		h := httpx.Record(l, httpx.RecordConfig{SkipPaths: []string{"/health"}})(okHandler())
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", p, nil))
+
+		assert.Empty(t, l.lines, p)
+	}
+}
+
 func TestRecordRedactsHeaders(t *testing.T) {
 	l := &recLogger{}
 	h := httpx.Record(l, httpx.RecordConfig{RedactHeaders: []string{"Authorization"}})(okHandler())
@@ -242,7 +253,13 @@ func TestRecordConfigLogsBody(t *testing.T) {
 		{"POST", "/uploads", false},
 		{"GET", "/uploads", true},
 		{"POST", "/auth/login", false},
+		{"POST", "//auth/login", false},
+		{"POST", "/x/../auth/login", false},
+		{"POST", "/auth/", false},
+		{"GET", "//creators", false},
+		{"POST", "/uploads/", false},
 		{"GET", "/chats", true},
+		{"GET", "//chats", true},
 	} {
 		assert.Equal(t, tc.logs, cfg.LogsBody(tc.method, tc.path), "%s %s", tc.method, tc.path)
 	}

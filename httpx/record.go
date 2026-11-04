@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -98,7 +99,8 @@ func normalizeKey(key string) string {
 }
 
 // RecordConfig tunes what Record logs. SkipPaths matches exactly; SkipBodyPaths
-// matches by prefix; SkipBodyRoutes matches a method and an exact path.
+// matches by prefix; SkipBodyRoutes matches a method and an exact path. Each
+// matches the path as sent or cleaned, so //auth/login counts as /auth/login.
 // RedactHeaders and RedactQuery extend the credentials Record always redacts;
 // they cannot un-redact them.
 type RecordConfig struct {
@@ -126,13 +128,15 @@ func (r Route) matches(method, path string) bool {
 
 // LogsBody reports whether Record logs the bodies of a request to method and
 // path.
-func (c RecordConfig) LogsBody(method, path string) bool {
-	if hasPrefix(path, c.SkipBodyPaths) {
-		return false
-	}
-	for _, r := range c.SkipBodyRoutes {
-		if r.matches(method, path) {
+func (c RecordConfig) LogsBody(method, urlPath string) bool {
+	for _, p := range spellings(urlPath) {
+		if hasPrefix(p, c.SkipBodyPaths) {
 			return false
+		}
+		for _, r := range c.SkipBodyRoutes {
+			if r.matches(method, p) {
+				return false
+			}
 		}
 	}
 	return true
@@ -162,7 +166,7 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := skip[r.URL.Path]; ok {
+			if isSkipped(skip, r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -307,6 +311,21 @@ func redactedURL(r *http.Request, keys RedactKeys) string {
 	u := *r.URL
 	u.RawQuery = keys.RedactQuery(u.RawQuery)
 	return u.RequestURI()
+}
+
+// spellings are a path as sent and cleaned: ServeMux routes //e/v1/i as
+// /e/v1/i, and cleaning drops the trailing slash a prefix like /auth/ needs.
+func spellings(p string) [2]string {
+	return [2]string{p, path.Clean(p)}
+}
+
+func isSkipped(skip map[string]struct{}, urlPath string) bool {
+	for _, p := range spellings(urlPath) {
+		if _, ok := skip[p]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func hasPrefix(path string, prefixes []string) bool {
