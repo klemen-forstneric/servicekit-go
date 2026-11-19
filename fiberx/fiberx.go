@@ -104,6 +104,7 @@ const (
 	logFieldBody          = "body"
 	logFieldStatusCode    = "status_code"
 	logFieldDuration      = "duration"
+	logFieldError         = "error"
 )
 
 const headerForwardedFor = "X-Forwarded-For"
@@ -158,7 +159,8 @@ func (c RecordConfig) LogsBody(method, path string) bool {
 }
 
 // Record logs each request and its response. Credential headers are always
-// redacted, and a body is logged up to MaxBodyBytes.
+// redacted, and a body is logged up to MaxBodyBytes. A 5xx whose body is not
+// logged still logs its error.
 func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 	if l == nil {
 		l = ember.NopLogger
@@ -224,7 +226,8 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 		)
 
 		start := time.Now()
-		if err := c.Next(); err != nil {
+		err := c.Next()
+		if err != nil {
 			// Write the error response here, as Fiber's logger does, so the line
 			// below logs the status the client gets.
 			if herr := c.App().ErrorHandler(c, err); herr != nil {
@@ -238,15 +241,34 @@ func Record(l ember.LoggerCtx, cfg RecordConfig) fiber.Handler {
 			respBody = redactedBody(c.Response().Body(), maxBody, redactBody)
 		}
 
-		l.Info(ctx, "Returned HTTP response",
-			logFieldStatusCode, c.Response().StatusCode(),
+		status := c.Response().StatusCode()
+		kvs := []any{
+			logFieldStatusCode, status,
 			logFieldHTTPMethod, c.Method(),
 			logFieldPath, path,
 			logFieldDuration, duration,
 			logFieldBody, respBody,
-		)
+		}
+		if !logBody && status >= fiber.StatusInternalServerError {
+			if cause := serverError(err, c.Response().Body()); cause != "" {
+				kvs = append(kvs, logFieldError, cause)
+			}
+		}
+		l.Info(ctx, "Returned HTTP response", kvs...)
 		return nil
 	}
+}
+
+// serverError is the handler's returned error, else the "error" field Error wrote.
+func serverError(err error, body []byte) string {
+	if err != nil {
+		return err.Error()
+	}
+	var b struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &b)
+	return b.Error
 }
 
 func redactedBody(raw []byte, limit int, redact httpx.RedactKeys) any {

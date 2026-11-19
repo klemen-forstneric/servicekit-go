@@ -300,6 +300,52 @@ func TestRecord_LogsTheResponseOfAHandlerError(t *testing.T) {
 	assert.IsType(t, time.Duration(0), cap.value(t, 1, "duration"))
 }
 
+// errorApp serves through Record a 500 written by Error, a returned error that
+// fiber's error handler turns into a 500, and a 404 written by Error.
+func errorApp(cap *capLogger, cfg fiberx.RecordConfig) *fiber.App {
+	app := fiber.New()
+	app.Use(fiberx.Record(cap, cfg))
+	app.Get("/written", func(c *fiber.Ctx) error {
+		return fiberx.Error(c, fiber.StatusInternalServerError, errors.New("mongo: connection refused"))
+	})
+	app.Get("/returned", func(c *fiber.Ctx) error { return errors.New("redis: timeout") })
+	app.Get("/missing", func(c *fiber.Ctx) error {
+		return fiberx.Error(c, fiber.StatusNotFound, errors.New("memory: not found"))
+	})
+	return app
+}
+
+func TestRecord_LogsTheErrorOfA5xxWithASkippedBody(t *testing.T) {
+	for path, want := range map[string]string{"/written": "mongo: connection refused", "/returned": "redis: timeout"} {
+		t.Run(path, func(t *testing.T) {
+			cap := &capLogger{}
+			app := errorApp(cap, fiberx.RecordConfig{SkipBodyPaths: []string{"/"}})
+
+			_, err := app.Test(httptest.NewRequest("GET", path, nil))
+
+			require.NoError(t, err)
+			assert.Equal(t, fiber.StatusInternalServerError, cap.value(t, 1, "status_code"))
+			assert.Equal(t, want, cap.value(t, 1, "error"))
+			assert.Nil(t, cap.value(t, 1, "body"))
+		})
+	}
+}
+
+func TestRecord_LeavesTheErrorToTheBodyOrTheStatus(t *testing.T) {
+	cap := &capLogger{}
+	skipped := errorApp(cap, fiberx.RecordConfig{SkipBodyPaths: []string{"/"}})
+	logged := errorApp(cap, fiberx.RecordConfig{})
+
+	_, err := skipped.Test(httptest.NewRequest("GET", "/missing", nil))
+	require.NoError(t, err)
+	_, err = logged.Test(httptest.NewRequest("GET", "/written", nil))
+	require.NoError(t, err)
+
+	assert.Nil(t, cap.value(t, 1, "error"), "a 4xx logs only its status")
+	assert.Nil(t, cap.value(t, 3, "error"), "a logged body already holds the error")
+	assert.NotNil(t, cap.value(t, 3, "body"))
+}
+
 func TestRecord_OmitsLargeBodies(t *testing.T) {
 	cap := &capLogger{}
 	app := recordApp(cap, fiberx.RecordConfig{MaxBodyBytes: 8}, `{"items":["a","b","c"]}`)
